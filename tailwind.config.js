@@ -1,0 +1,21 @@
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
+  theme: {
+    extend: {
+      colors: {
+        angola: {
+          red: '#CC0000',
+          black: '#000000',
+          gold: '#F0C040',
+        },
+      },
+      fontFamily: {
+        display: ['"Sora"', 'sans-serif'],
+        body: ['"DM Sans"', 'sans-serif'],
+        mono: ['"JetBrains Mono"', 'monospace'],
+      },
+    },
+  },
+  plugins: [],
+}

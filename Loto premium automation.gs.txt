@@ -1,0 +1,522 @@
+// =============================================================
+//  LOTO 5/90 ANGOLA — SISTEMA DE SUBSCRIÇÃO PREMIUM
+//  Google Apps Script — versão 2.0
+//  Fluxo: Registo → Confirmação Email → Trial 7 dias → Pagamento → Activo
+// =============================================================
+
+// ─── CONFIGURAÇÃO CENTRAL ────────────────────────────────────
+const CONFIG = {
+  SHEET_ID:        'COLE_AQUI_O_ID_DA_TUA_SHEET',          // ID da Google Sheet
+  SHEET_NAME:      'LOTO_SUBSCRICOES',
+  EMAIL_ADMIN:     'glowscalepro@gmail.com',
+  IBAN:            'AO06 0040 0000 1859 5631 1019 4',
+  BANCO:           'BAI',
+  TITULAR:         'O TEU NOME COMPLETO',                   // Nome do titular da conta
+  PRECO_MENSAL:    '2.500 AKZ',
+  TRIAL_DIAS:      7,
+  PRODUTO_NOME:    'Loto 5/90 Angola — Análise Premium',
+  APP_URL:         'COLE_AQUI_O_URL_DA_TUA_APP',            // ex: https://loto-angola.vercel.app
+};
+
+// ─── COLUNAS DA SHEET (índices 1-based) ──────────────────────
+const COL = {
+  REF:              1,   // LOTO-XXXX
+  NOME:             2,
+  EMAIL:            3,
+  DATA_REGISTO:     4,
+  STATUS:           5,   // PENDENTE_CONFIRMACAO | TRIAL | ATIVO | EXPIRADO | SUSPENSO
+  DATA_EXPIRACAO:   6,
+  RENOVACOES:       7,
+  PASSWORD_HASH:    8,
+  TOKEN_CONFIRM:    9,   // token UUID para confirmar email
+  TOKEN_USADO:      10,  // TRUE/FALSE
+};
+
+// ─── UTILITÁRIOS ─────────────────────────────────────────────
+
+function gerarREF_() {
+  const sheet = getSheet_();
+  const lastRow = sheet.getLastRow();
+  const num = lastRow < 1 ? 1 : lastRow + 1;
+  return 'LOTO-' + String(num).padStart(4, '0');
+}
+
+function gerarPassword_() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+  let pwd = '';
+  for (let i = 0; i < 8; i++) {
+    pwd += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return pwd;
+}
+
+function hashSHA256_(texto) {
+  const bytes = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    texto,
+    Utilities.Charset.UTF_8
+  );
+  return bytes.map(b => ('0' + (b & 0xFF).toString(16)).slice(-2)).join('');
+}
+
+function gerarToken_() {
+  return Utilities.getUuid();
+}
+
+function getSheet_() {
+  return SpreadsheetApp.openById(CONFIG.SHEET_ID)
+    .getSheetByName(CONFIG.SHEET_NAME);
+}
+
+function encontrarLinha_(ref) {
+  const sheet = getSheet_();
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][COL.REF - 1] === ref) return i + 1;
+  }
+  return -1;
+}
+
+function encontrarLinhaPorEmail_(email) {
+  const sheet = getSheet_();
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][COL.EMAIL - 1]).toLowerCase() === email.toLowerCase()) return i + 1;
+  }
+  return -1;
+}
+
+function encontrarLinhaPorToken_(token) {
+  const sheet = getSheet_();
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][COL.TOKEN_CONFIRM - 1] === token) return i + 1;
+  }
+  return -1;
+}
+
+function jsonOk_(data) {
+  return ContentService.createTextOutput(JSON.stringify({ ok: true, ...data }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function jsonErro_(msg) {
+  return ContentService.createTextOutput(JSON.stringify({ ok: false, erro: msg }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ─── PONTO DE ENTRADA HTTP ───────────────────────────────────
+
+function doPost(e) {
+  try {
+    const payload = JSON.parse(e.postData.contents);
+    const acao = payload.acao;
+
+    if (acao === 'registar')       return registarCliente_(payload);
+    if (acao === 'confirmarEmail') return confirmarEmail_(payload);
+    if (acao === 'login')          return loginCliente_(payload);
+    if (acao === 'verificarAccesso') return verificarAccesso_(payload);
+
+    return jsonErro_('Acção desconhecida: ' + acao);
+  } catch (err) {
+    return jsonErro_('Erro interno: ' + err.message);
+  }
+}
+
+function doGet(e) {
+  // Confirmação de email via link (GET)
+  const token = e.parameter.token;
+  if (token) {
+    return confirmarEmailGet_(token);
+  }
+  return ContentService.createTextOutput('Loto Premium API').setMimeType(ContentService.MimeType.TEXT);
+}
+
+// ─── ACÇÃO: REGISTAR CLIENTE ─────────────────────────────────
+
+function registarCliente_(payload) {
+  const { nome, email } = payload;
+
+  if (!nome || !email) return jsonErro_('Nome e email são obrigatórios');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return jsonErro_('Email inválido');
+
+  // Verificar se já existe
+  const linhaExistente = encontrarLinhaPorEmail_(email);
+  if (linhaExistente > 0) {
+    const sheet = getSheet_();
+    const status = sheet.getRange(linhaExistente, COL.STATUS).getValue();
+    if (status === 'PENDENTE_CONFIRMACAO') {
+      return jsonErro_('Este email já está registado mas ainda não confirmado. Verifica a tua caixa de email.');
+    }
+    return jsonErro_('Este email já está registado. Usa a opção de login.');
+  }
+
+  const sheet      = getSheet_();
+  const ref        = gerarREF_();
+  const password   = gerarPassword_();
+  const pwdHash    = hashSHA256_(password);
+  const token      = gerarToken_();
+  const agora      = new Date();
+
+  // Inserir linha na Sheet
+  sheet.appendRow([
+    ref,                    // REF
+    nome,                   // NOME
+    email,                  // EMAIL
+    agora,                  // DATA_REGISTO
+    'PENDENTE_CONFIRMACAO', // STATUS
+    '',                     // DATA_EXPIRACAO (vazia até confirmar)
+    0,                      // RENOVACOES
+    pwdHash,                // PASSWORD_HASH
+    token,                  // TOKEN_CONFIRM
+    'FALSE',                // TOKEN_USADO
+  ]);
+
+  // Enviar email de confirmação
+  enviarEmailConfirmacao_(nome, email, ref, password, token);
+
+  return jsonOk_({
+    ref,
+    mensagem: 'Registo efectuado. Verifica o teu email para activar o trial de 7 dias.',
+  });
+}
+
+// ─── ACÇÃO: CONFIRMAR EMAIL (via link GET) ────────────────────
+
+function confirmarEmailGet_(token) {
+  const sheet  = getSheet_();
+  const linha  = encontrarLinhaPorToken_(token);
+
+  const htmlFail = (msg) => HtmlService.createHtmlOutput(`
+    <html><body style="font-family:sans-serif;text-align:center;padding:60px">
+      <h2 style="color:#e53e3e">❌ ${msg}</h2>
+      <p><a href="${CONFIG.APP_URL}">Voltar à app</a></p>
+    </body></html>`);
+
+  if (linha < 0) return htmlFail('Link inválido ou já utilizado.');
+
+  const tokenUsado = sheet.getRange(linha, COL.TOKEN_USADO).getValue();
+  if (tokenUsado === 'TRUE' || tokenUsado === true) return htmlFail('Este link já foi utilizado.');
+
+  const status = sheet.getRange(linha, COL.STATUS).getValue();
+  if (status !== 'PENDENTE_CONFIRMACAO') return htmlFail('A conta já foi confirmada ou está noutra fase.');
+
+  // Activar trial
+  const agora     = new Date();
+  const expiracao = new Date(agora.getTime() + CONFIG.TRIAL_DIAS * 24 * 60 * 60 * 1000);
+
+  sheet.getRange(linha, COL.STATUS).setValue('TRIAL');
+  sheet.getRange(linha, COL.DATA_EXPIRACAO).setValue(expiracao);
+  sheet.getRange(linha, COL.TOKEN_USADO).setValue('TRUE');
+
+  const nome  = sheet.getRange(linha, COL.NOME).getValue();
+  const email = sheet.getRange(linha, COL.EMAIL).getValue();
+  const ref   = sheet.getRange(linha, COL.REF).getValue();
+
+  // Notificar admin
+  notifyAdmin_(`✅ Novo trial activado — ${ref}`, `${nome} (${email}) activou o trial de ${CONFIG.TRIAL_DIAS} dias.`);
+
+  return HtmlService.createHtmlOutput(`
+    <html><body style="font-family:sans-serif;text-align:center;padding:60px;background:#0a0a0a;color:#fff">
+      <h1 style="color:#ffd700">🎉 Email Confirmado!</h1>
+      <p style="font-size:18px">O teu trial de <strong>${CONFIG.TRIAL_DIAS} dias</strong> está activo, ${nome}.</p>
+      <p>Referência: <strong>${ref}</strong></p>
+      <p>Faz login na app com o email e password que recebeste.</p>
+      <a href="${CONFIG.APP_URL}" style="display:inline-block;margin-top:20px;padding:14px 32px;background:#ffd700;color:#000;border-radius:8px;text-decoration:none;font-weight:bold">
+        Entrar na App
+      </a>
+    </body></html>`);
+}
+
+// Versão POST (chamada pela app, não usada directamente)
+function confirmarEmail_(payload) {
+  const { token } = payload;
+  if (!token) return jsonErro_('Token em falta');
+
+  const sheet = getSheet_();
+  const linha = encontrarLinhaPorToken_(token);
+  if (linha < 0) return jsonErro_('Token inválido');
+
+  const tokenUsado = sheet.getRange(linha, COL.TOKEN_USADO).getValue();
+  if (tokenUsado === 'TRUE' || tokenUsado === true) return jsonErro_('Token já utilizado');
+
+  const agora     = new Date();
+  const expiracao = new Date(agora.getTime() + CONFIG.TRIAL_DIAS * 24 * 60 * 60 * 1000);
+
+  sheet.getRange(linha, COL.STATUS).setValue('TRIAL');
+  sheet.getRange(linha, COL.DATA_EXPIRACAO).setValue(expiracao);
+  sheet.getRange(linha, COL.TOKEN_USADO).setValue('TRUE');
+
+  return jsonOk_({ mensagem: `Trial de ${CONFIG.TRIAL_DIAS} dias activado.` });
+}
+
+// ─── ACÇÃO: LOGIN ─────────────────────────────────────────────
+
+function loginCliente_(payload) {
+  const { email, password } = payload;
+  if (!email || !password) return jsonErro_('Email e password são obrigatórios');
+
+  const linha = encontrarLinhaPorEmail_(email);
+  if (linha < 0) return jsonErro_('Email não encontrado');
+
+  const sheet     = getSheet_();
+  const pwdHash   = sheet.getRange(linha, COL.PASSWORD_HASH).getValue();
+  const inputHash = hashSHA256_(password);
+
+  if (inputHash !== pwdHash) return jsonErro_('Password incorrecta');
+
+  const status    = sheet.getRange(linha, COL.STATUS).getValue();
+  const expiracao = sheet.getRange(linha, COL.DATA_EXPIRACAO).getValue();
+  const nome      = sheet.getRange(linha, COL.NOME).getValue();
+  const ref       = sheet.getRange(linha, COL.REF).getValue();
+
+  if (status === 'PENDENTE_CONFIRMACAO') {
+    return jsonErro_('A conta ainda não foi confirmada. Verifica o teu email.');
+  }
+
+  // Verificar expiração
+  const agora = new Date();
+  if (expiracao && new Date(expiracao) < agora && status !== 'SUSPENSO') {
+    sheet.getRange(linha, COL.STATUS).setValue('EXPIRADO');
+    return jsonOk_({
+      nome, email, ref,
+      status: 'EXPIRADO',
+      expirado: true,
+      mensagem: 'A tua subscrição expirou. Renova enviando o comprovativo.',
+    });
+  }
+
+  return jsonOk_({
+    nome, email, ref,
+    status,
+    dataExpiracao: expiracao ? new Date(expiracao).toISOString() : null,
+    expirado: false,
+  });
+}
+
+// ─── ACÇÃO: VERIFICAR ACESSO (chamada silenciosa da app) ──────
+
+function verificarAccesso_(payload) {
+  const { email, ref } = payload;
+  if (!email || !ref) return jsonErro_('Parâmetros em falta');
+
+  const linha = encontrarLinhaPorEmail_(email);
+  if (linha < 0) return jsonOk_({ valido: false });
+
+  const sheet     = getSheet_();
+  const refSheet  = sheet.getRange(linha, COL.REF).getValue();
+  if (refSheet !== ref) return jsonOk_({ valido: false });
+
+  const status    = sheet.getRange(linha, COL.STATUS).getValue();
+  const expiracao = sheet.getRange(linha, COL.DATA_EXPIRACAO).getValue();
+
+  const agora   = new Date();
+  const expirou = expiracao && new Date(expiracao) < agora;
+
+  if (expirou && (status === 'TRIAL' || status === 'ATIVO')) {
+    sheet.getRange(linha, COL.STATUS).setValue('EXPIRADO');
+    return jsonOk_({ valido: false, status: 'EXPIRADO' });
+  }
+
+  const valido = (status === 'TRIAL' || status === 'ATIVO') && !expirou;
+  return jsonOk_({ valido, status, dataExpiracao: expiracao ? new Date(expiracao).toISOString() : null });
+}
+
+// ─── DETECTOR DE PAGAMENTOS (trigger por tempo) ───────────────
+
+function checkEmails() {
+  const threads = GmailApp.search('to:' + CONFIG.EMAIL_ADMIN + ' subject:LOTO- newer_than:2d', 0, 20);
+
+  threads.forEach(thread => {
+    const msgs = thread.getMessages();
+    msgs.forEach(msg => {
+      if (msg.isRead()) return;
+
+      const assunto = msg.getSubject();
+      const match   = assunto.match(/LOTO-\d{4}/);
+      if (!match) { msg.markRead(); return; }
+
+      const ref   = match[0];
+      const linha = encontrarLinha_(ref);
+      if (linha < 0) { msg.markRead(); return; }
+
+      const sheet     = getSheet_();
+      const status    = sheet.getRange(linha, COL.STATUS).getValue();
+      const expiracao = sheet.getRange(linha, COL.DATA_EXPIRACAO).getValue();
+      const nome      = sheet.getRange(linha, COL.NOME).getValue();
+      const email     = sheet.getRange(linha, COL.EMAIL).getValue();
+      const renovs    = sheet.getRange(linha, COL.RENOVACOES).getValue() || 0;
+
+      const agora        = new Date();
+      let novaExpiracao;
+
+      // Se já tem data de expiração futura, somar 30 dias a partir daí; senão, hoje+30
+      if (expiracao && new Date(expiracao) > agora) {
+        novaExpiracao = new Date(new Date(expiracao).getTime() + 30 * 24 * 60 * 60 * 1000);
+      } else {
+        novaExpiracao = new Date(agora.getTime() + 30 * 24 * 60 * 60 * 1000);
+      }
+
+      sheet.getRange(linha, COL.STATUS).setValue('ATIVO');
+      sheet.getRange(linha, COL.DATA_EXPIRACAO).setValue(novaExpiracao);
+      sheet.getRange(linha, COL.RENOVACOES).setValue(Number(renovs) + 1);
+
+      // Email de confirmação ao cliente
+      const isRenovacao = status === 'ATIVO' || Number(renovs) > 0;
+      enviarEmailActivacao_(nome, email, ref, novaExpiracao, isRenovacao);
+      notifyAdmin_(
+        `💰 Pagamento confirmado — ${ref}`,
+        `${nome} (${email})\nNova expiração: ${novaExpiracao.toLocaleDateString('pt-AO')}\nRenovações: ${Number(renovs) + 1}`
+      );
+
+      msg.markRead();
+    });
+  });
+}
+
+// ─── EMAILS ──────────────────────────────────────────────────
+
+function enviarEmailConfirmacao_(nome, email, ref, password, token) {
+  const linkConfirm = `${ScriptApp.getService().getUrl()}?token=${token}`;
+
+  const html = `
+  <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:600px;margin:0 auto;background:#0d0d0d;color:#f0f0f0;border-radius:16px;overflow:hidden">
+    <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);padding:40px;text-align:center;border-bottom:2px solid #ffd700">
+      <h1 style="color:#ffd700;margin:0;font-size:28px;letter-spacing:2px">🎯 LOTO 5/90</h1>
+      <p style="color:#aaa;margin:8px 0 0">Análise Premium Angola</p>
+    </div>
+    <div style="padding:40px">
+      <h2 style="color:#fff;margin-top:0">Olá, ${nome}!</h2>
+      <p style="color:#ccc;line-height:1.7">
+        O teu registo foi efectuado com sucesso. Clica no botão abaixo para confirmar 
+        o teu email e activar o <strong style="color:#ffd700">trial gratuito de ${CONFIG.TRIAL_DIAS} dias</strong>.
+      </p>
+      <div style="text-align:center;margin:32px 0">
+        <a href="${linkConfirm}" 
+           style="background:#ffd700;color:#000;padding:16px 40px;border-radius:8px;text-decoration:none;font-weight:bold;font-size:16px;display:inline-block">
+          ✅ Confirmar Email e Activar Trial
+        </a>
+      </div>
+      <div style="background:#1a1a2e;border-radius:12px;padding:24px;margin:24px 0;border-left:4px solid #ffd700">
+        <p style="margin:0 0 8px;color:#aaa;font-size:13px">AS TUAS CREDENCIAIS DE ACESSO</p>
+        <p style="margin:4px 0;color:#fff"><strong>Email:</strong> ${email}</p>
+        <p style="margin:4px 0;color:#fff"><strong>Password:</strong> <code style="background:#000;padding:4px 8px;border-radius:4px;color:#ffd700;font-size:16px">${password}</code></p>
+        <p style="margin:4px 0;color:#fff"><strong>Referência:</strong> <code style="background:#000;padding:4px 8px;border-radius:4px;color:#ffd700">${ref}</code></p>
+        <p style="margin:12px 0 0;color:#e53e3e;font-size:13px">⚠️ Guarda estes dados. A password não será enviada novamente.</p>
+      </div>
+      <div style="background:#111;border-radius:12px;padding:20px;margin-top:24px">
+        <p style="margin:0 0 8px;color:#aaa;font-size:13px">APÓS O TRIAL — COMO RENOVAR</p>
+        <p style="color:#ccc;font-size:14px;line-height:1.6;margin:0">
+          1. Transfere <strong style="color:#ffd700">${CONFIG.PRECO_MENSAL}</strong> para o IBAN ${CONFIG.BANCO}: <strong>${CONFIG.IBAN}</strong><br>
+          2. Coloca o assunto do email de comprovativo: <strong style="color:#ffd700">${ref}</strong><br>
+          3. O acesso é renovado automaticamente em poucos minutos.
+        </p>
+      </div>
+    </div>
+    <div style="padding:20px;text-align:center;border-top:1px solid #222">
+      <p style="color:#555;font-size:12px;margin:0">${CONFIG.PRODUTO_NOME} · glowscalepro@gmail.com</p>
+    </div>
+  </div>`;
+
+  GmailApp.sendEmail(email, `[${ref}] Confirma o teu email — Loto 5/90 Premium`, '', {
+    htmlBody: html,
+    name: 'Loto 5/90 Premium',
+  });
+}
+
+function enviarEmailActivacao_(nome, email, ref, expiracao, isRenovacao) {
+  const tipo = isRenovacao ? 'Renovação Confirmada' : 'Subscrição Activada';
+  const dataExp = new Date(expiracao).toLocaleDateString('pt-AO');
+
+  const html = `
+  <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:600px;margin:0 auto;background:#0d0d0d;color:#f0f0f0;border-radius:16px;overflow:hidden">
+    <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);padding:40px;text-align:center;border-bottom:2px solid #ffd700">
+      <h1 style="color:#ffd700;margin:0;font-size:28px">🏆 ${tipo}!</h1>
+    </div>
+    <div style="padding:40px">
+      <h2 style="color:#fff;margin-top:0">Olá, ${nome}!</h2>
+      <p style="color:#ccc;line-height:1.7">
+        ${isRenovacao ? 'A tua renovação foi confirmada.' : 'O teu pagamento foi recebido e a subscrição está activa.'} 
+        Tens acesso premium até <strong style="color:#ffd700">${dataExp}</strong>.
+      </p>
+      <div style="background:#1a1a2e;border-radius:12px;padding:24px;margin:24px 0;border-left:4px solid #22c55e">
+        <p style="margin:0 0 8px;color:#aaa;font-size:13px">ESTADO DA SUBSCRIÇÃO</p>
+        <p style="margin:4px 0;color:#fff"><strong>Referência:</strong> ${ref}</p>
+        <p style="margin:4px 0;color:#fff"><strong>Estado:</strong> <span style="color:#22c55e">✅ ACTIVO</span></p>
+        <p style="margin:4px 0;color:#fff"><strong>Válido até:</strong> ${dataExp}</p>
+      </div>
+      <p style="color:#aaa;font-size:14px">
+        Para renovar no próximo mês, envia o comprovativo com o assunto 
+        <strong style="color:#ffd700">${ref}</strong>.
+      </p>
+      <div style="text-align:center;margin-top:32px">
+        <a href="${CONFIG.APP_URL}" 
+           style="background:#ffd700;color:#000;padding:16px 40px;border-radius:8px;text-decoration:none;font-weight:bold;font-size:16px;display:inline-block">
+          Aceder à App
+        </a>
+      </div>
+    </div>
+  </div>`;
+
+  GmailApp.sendEmail(email, `[${ref}] ${tipo} — Loto 5/90 Premium`, '', {
+    htmlBody: html,
+    name: 'Loto 5/90 Premium',
+  });
+}
+
+function notifyAdmin_(assunto, corpo) {
+  GmailApp.sendEmail(CONFIG.EMAIL_ADMIN, assunto, corpo);
+}
+
+// ─── UTILITÁRIO: RESET PASSWORD MANUAL ───────────────────────
+
+function resetPassword(emailCliente) {
+  const linha = encontrarLinhaPorEmail_(emailCliente);
+  if (linha < 0) { Logger.log('Email não encontrado: ' + emailCliente); return; }
+
+  const sheet      = getSheet_();
+  const novaPwd    = gerarPassword_();
+  const novoHash   = hashSHA256_(novaPwd);
+  const nome       = sheet.getRange(linha, COL.NOME).getValue();
+  const ref        = sheet.getRange(linha, COL.REF).getValue();
+
+  sheet.getRange(linha, COL.PASSWORD_HASH).setValue(novoHash);
+
+  const html = `
+  <div style="font-family:sans-serif;max-width:500px;margin:0 auto;padding:32px;background:#0d0d0d;color:#fff;border-radius:12px">
+    <h2 style="color:#ffd700">🔑 Nova Password — Loto 5/90 Premium</h2>
+    <p>Olá ${nome}, a tua password foi reposta.</p>
+    <div style="background:#1a1a2e;padding:20px;border-radius:8px;border-left:4px solid #ffd700">
+      <p><strong>Email:</strong> ${emailCliente}</p>
+      <p><strong>Nova Password:</strong> <code style="color:#ffd700;font-size:18px">${novaPwd}</code></p>
+      <p><strong>Referência:</strong> ${ref}</p>
+    </div>
+    <p style="color:#aaa;font-size:13px">Altera a password após o login.</p>
+  </div>`;
+
+  GmailApp.sendEmail(emailCliente, `[${ref}] Nova password — Loto 5/90 Premium`, '', {
+    htmlBody: html,
+    name: 'Loto 5/90 Premium',
+  });
+
+  Logger.log('Password reposta para: ' + emailCliente + ' | Nova pwd: ' + novaPwd);
+}
+
+// ─── CRIAÇÃO DA SHEET (correr 1 vez) ─────────────────────────
+
+function criarSheet() {
+  const ss    = SpreadsheetApp.openById(CONFIG.SHEET_ID);
+  let sheet   = ss.getSheetByName(CONFIG.SHEET_NAME);
+  if (!sheet) sheet = ss.insertSheet(CONFIG.SHEET_NAME);
+
+  sheet.clearContents();
+  const headers = ['REF', 'NOME', 'EMAIL', 'DATA_REGISTO', 'STATUS', 'DATA_EXPIRACAO', 'RENOVACOES', 'PASSWORD_HASH', 'TOKEN_CONFIRM', 'TOKEN_USADO'];
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  sheet.getRange(1, 1, 1, headers.length)
+    .setBackground('#1a1a2e')
+    .setFontColor('#ffd700')
+    .setFontWeight('bold');
+  sheet.setFrozenRows(1);
+  sheet.setColumnWidths(1, headers.length, 160);
+  Logger.log('Sheet criada: ' + CONFIG.SHEET_NAME);
+}
