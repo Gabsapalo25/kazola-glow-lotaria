@@ -7,9 +7,11 @@ import PrizeCalculator from './components/PrizeCalculator';
 import AccessGate from './components/AccessGate';
 import PremiumBanner from './components/PremiumBanner';
 import UpgradeModal from './components/UpgradeModal';
+import TokenActivation from './components/TokenActivation';
+import DiarioApostas from './components/DiarioApostas';
+import PlanoSemanal from './components/PlanoSemanal';
+import RelatorioMensal from './components/RelatorioMensal';
 import {
-  DRAWS as SIMULATED_DRAWS,
-  DATA_IS_SIMULATED,
   TOTAL_NUMBERS,
   PICK_SIZE,
   GAME_NAME,
@@ -39,7 +41,7 @@ import {
   type Filter,
   type GenerationStrategy,
 } from './lib/generator';
-import { fetchRealDraws } from './lib/apiClient';
+import { fetchRealDraws, checkPremiumStatus } from './lib/apiClient';
 import {
   GRELHA_EXEMPLO,
   TOTOBOLA_DATA_IS_SIMULATED,
@@ -57,6 +59,9 @@ import {
   todayStr,
   FREE_GENS_DAY,
   TRIAL_DAYS,
+  shouldVerifyWithServer,
+  isPremiumValid,
+  activatePremiumFromServer,
   type UserSession,
 } from './lib/session';
 
@@ -110,12 +115,32 @@ function fmtKz(n: number) {
   return n.toLocaleString('pt-AO', { style: 'currency', currency: 'AOA', maximumFractionDigits: 0 });
 }
 
+// =============================================================
+// 1. FUNÇÕES DE CACHE
+// =============================================================
+function loadCachedDraws(): Draw[] | null {
+  try {
+    const cached = localStorage.getItem('kazola_last_draws');
+    return cached ? JSON.parse(cached) : null;
+  } catch { 
+    return null; 
+  }
+}
+
+function saveCachedDraws(draws: Draw[]) {
+  try {
+    localStorage.setItem('kazola_last_draws', JSON.stringify(draws));
+    localStorage.setItem('kazola_last_draws_date', new Date().toISOString());
+  } catch { /* silent */ }
+}
+
 export default function App() {
-  // ── SESSÃO PROFISSIONAL (do Claude) ─────────────────────────────────
+  // ── SESSÃO PROFISSIONAL ─────────────────────────────────
   const [session, setSession] = useState<UserSession | null>(() => loadSession());
   const [showGate, setShowGate] = useState<boolean>(() => !loadSession());
   const [gateReason, setGateReason] = useState<'first_visit' | 'trial_expired' | 'daily_limit'>('first_visit');
   const [showUpgrade, setShowUpgrade] = useState(false);
+  const [showTokenActivation, setShowTokenActivation] = useState(false);
   const [toast, setToast] = useState<{ msg: string; type: 'error' | 'success' | 'info' } | null>(null);
 
   const showToast = useCallback((msg: string, type: 'error' | 'success' | 'info' = 'info') => {
@@ -146,10 +171,11 @@ export default function App() {
   const [reflectionDays, setReflectionDays] = useState<number | null>(null);
   const [showReflectionConfirm, setShowReflectionConfirm] = useState(false);
 
-  // ── Dados (API real com fallback simulado) ───────────────────────────
-  const [draws, setDraws] = useState<Draw[]>(SIMULATED_DRAWS);
+  // ── Dados (APENAS API REAL - SEM FALLBACK) ───────────────────────────
+  const [draws, setDraws] = useState<Draw[]>(() => loadCachedDraws() || []);
   const [usingOfficial, setUsingOfficial] = useState(false);
   const [loadingApi, setLoadingApi] = useState(true);
+  const [apiError, setApiError] = useState(false);
 
   // ── Gerador ─────────────────────────────────────────────────────────
   const [strategy, setStrategy] = useState<GenerationStrategy>('equilibrado');
@@ -164,7 +190,10 @@ export default function App() {
 
   // ── Histórico ───────────────────────────────────────────────────────
   const [windowSize, setWindowSize] = useState(60);
-  const [activeDraw, setActiveDraw] = useState<Draw | null>(SIMULATED_DRAWS[0]);
+  const [activeDraw, setActiveDraw] = useState<Draw | null>(() => {
+    const cached = loadCachedDraws();
+    return cached?.[0] || null;
+  });
   const [histPage, setHistPage] = useState(0);
   const HIST_PAGE_SIZE = 20;
 
@@ -204,7 +233,32 @@ export default function App() {
     ? ['equilibrado', 'frequencia', 'montecarlo', 'aleatorio']
     : ['equilibrado', 'aleatorio'];
 
-  // ── Registro via Gate (do Claude) ───────────────────────────────────
+  // ── Função de verificação premium no servidor ───────────────────────
+  const verifyPremiumStatus = useCallback(async (currentSession: UserSession) => {
+    if (shouldVerifyWithServer(currentSession)) {
+      try {
+        const result = await checkPremiumStatus(currentSession.email);
+        if (result.ok && result.isPremium && result.expiracao) {
+          const plano = result.plano === 'anual' ? 'anual' : 
+                        result.plano === 'vitalicio' ? 'vitalicio' : 'mensal';
+          const updatedSession = activatePremiumFromServer(currentSession, plano, result.expiracao);
+          setSession(updatedSession);
+          showToast('Premium verificado e activado!', 'success');
+        }
+      } catch (error) {
+        console.error('Erro ao verificar premium:', error);
+      }
+    }
+  }, [showToast]);
+
+  // ── Verificação periódica de premium ────────────────────────────────
+  useEffect(() => {
+    if (session && !isPremiumValid(session)) {
+      verifyPremiumStatus(session);
+    }
+  }, [session, verifyPremiumStatus]);
+
+  // ── Registro via Gate ───────────────────────────────────
   const handleRegister = useCallback((email: string) => {
     const now = Date.now();
     const newSession: UserSession = {
@@ -214,6 +268,11 @@ export default function App() {
       generationsToday: 0,
       isPremium: false,
       trialExpires: now + TRIAL_DAYS * 24 * 60 * 60 * 1000,
+      plano: null,
+      premiumExpiracao: null,
+      tokenActivacao: null,
+      verificadoNoServidor: false,
+      ultimaVerificacao: null,
     };
     saveSession(newSession);
     setSession(newSession);
@@ -221,7 +280,7 @@ export default function App() {
     showToast(`Bem-vindo! Trial de ${TRIAL_DAYS} dias activado.`, 'success');
   }, [showToast]);
 
-  // ── Verificação de acesso (do Claude) ───────────────────────────────
+  // ── Verificação de acesso ───────────────────────────────
   const checkAccess = useCallback((): boolean => {
     if (!session) {
       setGateReason('first_visit');
@@ -301,7 +360,7 @@ export default function App() {
     }
   }, [timerAtivo, timerMinutos]);
 
-  // Buscar dados da API real
+  // Buscar dados da API real (APENAS REAL, SEM FALLBACK)
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -312,55 +371,16 @@ export default function App() {
           setDraws(real);
           setActiveDraw(real[0]);
           setUsingOfficial(true);
+          saveCachedDraws(real);
         }
       } catch (error) {
         console.error('Erro ao buscar dados da API:', error);
+        setApiError(true);
       }
       setLoadingApi(false);
     })();
     return () => { cancelled = true; };
   }, []);
-
-  // Coleta automática de dados
-  useEffect(() => {
-    let interval: ReturnType<typeof setInterval>;
-    const horarios = [
-      { hora: 10, minutos: [5, 20] },
-      { hora: 13, minutos: [5, 20] },
-      { hora: 16, minutos: [5, 20] },
-      { hora: 19, minutos: [5, 10, 20] },
-    ];
-
-    const verificarEColetar = async () => {
-      const agora = new Date();
-      const horaAtual = agora.getHours();
-      const minutoAtual = agora.getMinutes();
-
-      const deveExecutar = horarios.some(h =>
-        h.hora === horaAtual && h.minutos.includes(minutoAtual)
-      );
-
-      if (deveExecutar && !loadingApi) {
-        console.log(`🔄 Coleta automática às ${horaAtual}:${minutoAtual}`);
-        setLoadingApi(true);
-        try {
-          const real = await fetchRealDraws();
-          if (real.length) {
-            setDraws(real);
-            setActiveDraw(real[0]);
-            setUsingOfficial(true);
-          }
-        } catch (error) {
-          console.error('Erro na coleta automática:', error);
-        }
-        setLoadingApi(false);
-      }
-    };
-
-    interval = setInterval(verificarEColetar, 60000);
-    verificarEColetar();
-    return () => clearInterval(interval);
-  }, [loadingApi]);
 
   // Estatísticas
   const freq = useMemo(() => computeFrequency(draws.slice(0, windowSize)), [draws, windowSize]);
@@ -373,7 +393,6 @@ export default function App() {
   const probs = useMemo(() => probabilityHint(), []);
   const maxFreq = useMemo(() => Math.max(1, ...freq.freq.slice(1)), [freq]);
   const maxDecade = useMemo(() => Math.max(1, ...decades.map(d => d.count)), [decades]);
-  const isSimulated = usingOfficial ? false : DATA_IS_SIMULATED;
 
   // Gerador Totobola
   function generateTotobolaLine(): string[] {
@@ -446,7 +465,6 @@ export default function App() {
       if (r) out.push({ numbers: r.numbers, id: Date.now() + i });
     }
     setGenerated(out);
-    // Registrar geração e atualizar sessão
     if (session) {
       const updated = recordGeneration(session);
       setSession(updated);
@@ -531,10 +549,26 @@ export default function App() {
   function handleUpgraded(updatedSession: UserSession) {
     setSession(updatedSession);
     setShowUpgrade(false);
+    setShowTokenActivation(false);
     showToast('Parabéns! Agora você é Premium!', 'success');
   }
 
-  function handleAccess(s: UserSession) {
+  async function handleAccess(s: UserSession) {
+    try {
+      const result = await checkPremiumStatus(s.email);
+      if (result.ok && result.isPremium && result.expiracao) {
+        const plano = result.plano === 'anual' ? 'anual' : 
+                      result.plano === 'vitalicio' ? 'vitalicio' : 'mensal';
+        const premiumSession = activatePremiumFromServer(s, plano, result.expiracao);
+        setSession(premiumSession);
+        setShowGate(false);
+        showToast('Premium activado! Bem-vindo de volta.', 'success');
+        return;
+      }
+    } catch (error) {
+      console.error('Erro ao verificar premium:', error);
+    }
+    
     setSession(s);
     setShowGate(false);
   }
@@ -571,6 +605,15 @@ export default function App() {
         />
       )}
 
+      {/* ── Token Activation Modal ─────────────────────────────────── */}
+      {showTokenActivation && session && (
+        <TokenActivation
+          session={session}
+          onUpgraded={handleUpgraded}
+          onClose={() => setShowTokenActivation(false)}
+        />
+      )}
+
       {/* ── Verificação de idade ─────────────────────────────────── */}
       {!ageOk && (
         <div className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4">
@@ -601,7 +644,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ── BARRA DE SESSÃO PROFISSIONAL (do Claude) ── */}
+      {/* ── BARRA DE SESSÃO PROFISSIONAL ── */}
       <div className="bg-neutral-900 text-white">
         <div className="max-w-6xl mx-auto px-4 py-2 flex flex-wrap items-center justify-between gap-3 text-sm">
           <div className="flex items-center gap-2">
@@ -617,6 +660,14 @@ export default function App() {
                   {!session.isPremium && <span className="ml-2 text-amber-400">· Trial: {daysLeft}d</span>}
                   {session.isPremium && <span className="ml-2 text-green-400">· PREMIUM ✓</span>}
                 </span>
+                {session && !session.isPremium && (
+                  <button 
+                    onClick={() => setShowTokenActivation(true)}
+                    className="text-xs text-amber-400 hover:text-amber-300 transition-colors"
+                  >
+                    🔑 Inserir token
+                  </button>
+                )}
                 <button onClick={handleLogout} className="text-neutral-400 hover:text-white text-xs">Sair</button>
               </>
             ) : (
@@ -685,7 +736,7 @@ export default function App() {
             <PremiumHeaderButton onLoginClick={() => setShowLogin(true)} />
           </nav>
 
-          {/* Mobile Menu Button (Hambúrguer) */}
+          {/* Mobile Menu Button */}
           <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)} className="md:hidden p-2 rounded-lg hover:bg-neutral-100 transition">
             <svg className="w-6 h-6 text-neutral-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               {mobileMenuOpen ? (
@@ -728,20 +779,21 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── Banner de origem dos dados ───────────────────────────── */}
-      <div className={`${isSimulated ? 'bg-neutral-100' : 'bg-emerald-50'} border-b border-neutral-200`}>
-        <div className="max-w-6xl mx-auto px-4 py-2 text-xs md:text-sm text-neutral-700 flex items-center gap-2">
-          <span aria-hidden>{isSimulated ? '🧪' : '✅'}</span>
-          {loadingApi
-            ? <span>A carregar dados da API oficial…</span>
-            : isSimulated
-              ? <span>⚠️ Dados simulados. A API oficial não retornou dados.</span>
-              : <span>✅ Dados reais da API oficial da Lotaria Nacional.</span>
-          }
+      {/* ── BANNER DE ORIGEM DOS DADOS ───────────────────────── */}
+      <div className={`${!apiError && draws.length > 0 ? 'bg-emerald-50' : 'bg-amber-50'} border-b border-neutral-200`}>
+        <div className="max-w-6xl mx-auto px-4 py-2 text-xs md:text-sm flex items-center gap-2">
+          <span aria-hidden>{!apiError && draws.length > 0 ? '✅' : '🕐'}</span>
+          {loadingApi ? (
+            <span>A carregar dados da API oficial…</span>
+          ) : !apiError && draws.length > 0 ? (
+            <span>✅ Dados reais da API oficial da Lotaria Nacional.</span>
+          ) : (
+            <span>🕐 A aguardar actualização dos dados.</span>
+          )}
         </div>
       </div>
 
-      {/* ── Premium Banner (do Claude) ── */}
+      {/* ── Premium Banner ── */}
       {session && (
         <PremiumBanner
           session={session}
@@ -833,7 +885,7 @@ export default function App() {
           </Card>
         )}
 
-        {/* ── Tabs com CORES FORTES E VIVAS (fundo colorido) ─────────────────────────────────── */}
+        {/* ── Tabs ──────────────────────────────────────────────────── */}
         <div className="flex gap-3 border-b border-neutral-200 pb-0">
           <button
             onClick={() => setTab('loto')}
@@ -945,7 +997,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Banner Premium (sistema existente) */}
                   {!premium.isActive && !premium.isTrial && !session?.isPremium && (
                     <PremiumBanner onLogin={() => setShowLogin(true)} />
                   )}
@@ -1021,6 +1072,40 @@ export default function App() {
                 )}
               </Card>
             </section>
+
+            {/* Diário de Apostas */}
+            {session?.isPremium || premium.isActive ? (
+              <DiarioApostas session={session!} />
+            ) : (
+              <Card title="📓 Diário de Apostas" icon={<span>📓</span>}>
+                <div className="text-center py-6 text-neutral-500">
+                  🔒 Disponível apenas para utilizadores Premium.
+                  <button onClick={() => setShowUpgrade(true)} className="block mx-auto mt-3 px-4 py-2 bg-amber-500 text-black rounded-xl font-bold text-sm">
+                    Upgrade Premium
+                  </button>
+                </div>
+              </Card>
+            )}
+
+            {/* Plano Semanal */}
+            {session?.isPremium || premium.isActive ? (
+              <PlanoSemanal 
+                session={session!}
+                weights={weights}
+                hotCold={hotCold}
+                gaps={gaps}
+                draws={draws}
+              />
+            ) : (
+              <Card title="📅 Plano Semanal" icon={<span>📅</span>}>
+                <div className="text-center py-6 text-neutral-500">
+                  🔒 Disponível apenas para utilizadores Premium.
+                  <button onClick={() => setShowUpgrade(true)} className="block mx-auto mt-3 px-4 py-2 bg-amber-500 text-black rounded-xl font-bold text-sm">
+                    Upgrade Premium
+                  </button>
+                </div>
+              </Card>
+            )}
 
             {/* Simulador de Orçamento */}
             <Card title="💰 Simulador de apostas" icon={<span>🎯</span>}>
@@ -1156,6 +1241,20 @@ export default function App() {
                 </div>
               </div>
             </Card>
+
+            {/* Relatório Mensal */}
+            {session?.isPremium || premium.isActive ? (
+              <RelatorioMensal session={session!} />
+            ) : (
+              <Card title="📊 Relatório Mensal" icon={<span>📊</span>}>
+                <div className="text-center py-6 text-neutral-500">
+                  🔒 Disponível apenas para utilizadores Premium.
+                  <button onClick={() => setShowUpgrade(true)} className="block mx-auto mt-3 px-4 py-2 bg-amber-500 text-black rounded-xl font-bold text-sm">
+                    Upgrade Premium
+                  </button>
+                </div>
+              </Card>
+            )}
 
             {/* Favoritos */}
             <Card title="Os seus favoritos" subtitle="Guardados neste dispositivo (localStorage)." icon={<span>💾</span>}>
@@ -1382,7 +1481,6 @@ export default function App() {
                   </table>
                 </div>
 
-                {/* Paginação */}
                 {histPages > 1 && (
                   <div className="flex items-center justify-between mt-4 text-sm">
                     <button onClick={() => setHistPage(p => Math.max(0, p - 1))}
@@ -1533,12 +1631,11 @@ export default function App() {
           </Card>
         </section>
 
-        {/* ── Jogo responsável (3 MODAIS COMPLETAMENTE DIFERENTES) ─────────────── */}
+        {/* ── Jogo responsável ────────────────────────────────────── */}
         <Card title="Jogo responsável" subtitle="Ferramentas de apoio para uma experiência saudável."
           icon={<span>🛡️</span>} className="bg-emerald-50 ring-1 ring-emerald-200">
 
           <div className="grid md:grid-cols-3 gap-4">
-            {/* Botão 1 - Autoavaliação */}
             <button onClick={() => setModalResponsavel('autoavaliacao')}
               className="text-left rounded-2xl bg-white p-5 ring-1 ring-emerald-200 hover:ring-emerald-500 transition-all hover:scale-[1.02] group">
               <div className="text-3xl mb-2 group-hover:scale-110 transition">📋</div>
@@ -1546,7 +1643,6 @@ export default function App() {
               <p className="text-sm text-neutral-700 mt-1">Responda a perguntas para avaliar os seus hábitos de jogo.</p>
             </button>
 
-            {/* Botão 2 - Limites de tempo */}
             <button onClick={() => setModalResponsavel('limites')}
               className="text-left rounded-2xl bg-white p-5 ring-1 ring-emerald-200 hover:ring-emerald-500 transition-all hover:scale-[1.02] group">
               <div className="text-3xl mb-2 group-hover:scale-110 transition">⏱️</div>
@@ -1554,7 +1650,6 @@ export default function App() {
               <p className="text-sm text-neutral-700 mt-1">Defina alertas e organize pausas regulares.</p>
             </button>
 
-            {/* Botão 3 - Período de reflexão */}
             <button onClick={() => setModalResponsavel('reflexao')}
               className="text-left rounded-2xl bg-white p-5 ring-1 ring-emerald-200 hover:ring-emerald-500 transition-all hover:scale-[1.02] group">
               <div className="text-3xl mb-2 group-hover:scale-110 transition">🚪</div>
@@ -1659,7 +1754,7 @@ export default function App() {
         </p>
       </Modal>
 
-      {/* MODAL 1 - AUTOAVALIAÇÃO (conteúdo ÚNICO) */}
+      {/* MODAL 1 - AUTOAVALIAÇÃO */}
       <Modal open={modalResponsavel === 'autoavaliacao'} onClose={() => setModalResponsavel(null)} title="📋 Autoavaliação - Hábitos de Jogo">
         <div className="space-y-4 text-sm">
           <p className="font-bold text-emerald-800">Responda com sinceridade para avaliar os seus hábitos:</p>
@@ -1727,10 +1822,11 @@ export default function App() {
           </div>
 
           {autoavaliacaoFeedback && (
-            <div className={`p-4 rounded-xl ${autoavaliacaoFeedback.cor === 'red' ? 'bg-red-50 border border-red-200' :
-                autoavaliacaoFeedback.cor === 'amber' ? 'bg-amber-50 border border-amber-200' :
-                  'bg-green-50 border border-green-200'
-              }`}>
+            <div className={`p-4 rounded-xl ${
+              autoavaliacaoFeedback.cor === 'red' ? 'bg-red-50 border border-red-200' :
+              autoavaliacaoFeedback.cor === 'amber' ? 'bg-amber-50 border border-amber-200' :
+              'bg-green-50 border border-green-200'
+            }`}>
               <div className="font-bold text-base mb-1">{autoavaliacaoFeedback.nivel}</div>
               <p className="text-sm mb-2">{autoavaliacaoFeedback.mensagem}</p>
               <p className="text-xs font-medium">{autoavaliacaoFeedback.acao}</p>
@@ -1743,7 +1839,7 @@ export default function App() {
         </div>
       </Modal>
 
-      {/* MODAL 2 - LIMITES DE TEMPO (com temporizador FUNCIONAL) */}
+      {/* MODAL 2 - LIMITES DE TEMPO */}
       <Modal open={modalResponsavel === 'limites'} onClose={() => setModalResponsavel(null)} title="⏱️ Limites de tempo - Controle sua sessão">
         <div className="space-y-4 text-sm">
           <p className="font-bold text-emerald-800">Defina limites saudáveis para manter o controle:</p>
@@ -1786,7 +1882,7 @@ export default function App() {
         </div>
       </Modal>
 
-      {/* MODAL 3 - PERÍODO DE REFLEXÃO (auto-exclusão) */}
+      {/* MODAL 3 - PERÍODO DE REFLEXÃO */}
       <Modal open={modalResponsavel === 'reflexao'} onClose={() => setModalResponsavel(null)} title="🚪 Período de reflexão - Faça uma pausa">
         <div className="space-y-4 text-sm">
           <p className="font-bold text-emerald-800">Afaste-se temporariamente se sentir necessidade:</p>
@@ -1836,15 +1932,17 @@ export default function App() {
         <PrizeCalculator />
       </Modal>
 
-      {/* Modais Premium (sistema existente) */}
+      {/* Modais Premium */}
       {showLogin && <LoginModal onClose={() => setShowLogin(false)} />}
       <TrialExpiredModal />
 
-      {/* TOAST NOTIFICATIONS (do Claude) */}
+      {/* TOAST NOTIFICATIONS */}
       {toast && (
         <div className="fixed bottom-4 right-4 z-50 animate-slide-in">
-          <div className={`px-4 py-3 rounded-lg shadow-lg text-white ${toast.type === 'error' ? 'bg-red-600' : toast.type === 'success' ? 'bg-green-600' : 'bg-blue-600'
-            }`}>
+          <div className={`px-4 py-3 rounded-lg shadow-lg text-white ${
+            toast.type === 'error' ? 'bg-red-600' : 
+            toast.type === 'success' ? 'bg-green-600' : 'bg-blue-600'
+          }`}>
             {toast.msg}
           </div>
         </div>

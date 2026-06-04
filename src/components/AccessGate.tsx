@@ -10,8 +10,10 @@ import {
   loadSession,
   createSession,
   loginByEmail,
+  activatePremiumFromServer,
   type UserSession,
 } from '../lib/session';
+import { checkPremiumStatus } from '../lib/apiClient';
 
 interface Props {
   onAccess : (session: UserSession) => void;
@@ -40,6 +42,29 @@ export default function AccessGate({ onAccess, reason = 'first_visit' }: Props) 
 
     setLoading(true); setError('');
 
+    // ===== NOVA VERIFICAÇÃO: Verificar se já é premium no servidor =====
+    try {
+      const serverResult = await checkPremiumStatus(trimmed);
+      
+      if (serverResult.ok && serverResult.isPremium && serverResult.expiracao) {
+        // Utilizador já é premium no servidor - activar imediatamente
+        const plano = serverResult.plano === 'anual' ? 'anual' : 
+                      serverResult.plano === 'vitalicio' ? 'vitalicio' : 'mensal';
+        const session = activatePremiumFromServer(
+          createSession(trimmed),
+          plano,
+          serverResult.expiracao
+        );
+        setLoading(false);
+        onAccess(session);
+        return;
+      }
+    } catch (err) {
+      console.error('Erro ao verificar premium no servidor:', err);
+      // Continua com o fluxo normal de registo
+    }
+    // ===== FIM DA VERIFICAÇÃO =====
+
     // Verifica se já tem sessão activa com este email
     const existing = loadSession();
     if (existing && existing.email === trimmed && Date.now() < existing.trialExpires) {
@@ -58,6 +83,37 @@ export default function AccessGate({ onAccess, reason = 'first_visit' }: Props) 
     if (!isValidEmail(trimmed)) { setError('Insere um email válido.'); return; }
 
     setLoading(true); setError('');
+
+    // ===== NOVA VERIFICAÇÃO: Verificar premium no servidor antes do login =====
+    try {
+      const serverResult = await checkPremiumStatus(trimmed);
+      
+      if (serverResult.ok && serverResult.isPremium && serverResult.expiracao) {
+        // Utilizador é premium no servidor
+        const existingSession = loginByEmail(trimmed);
+        const plano = serverResult.plano === 'anual' ? 'anual' : 
+                      serverResult.plano === 'vitalicio' ? 'vitalicio' : 'mensal';
+        
+        let session: UserSession;
+        
+        if (existingSession) {
+          // Actualizar sessão existente com dados do servidor
+          session = activatePremiumFromServer(existingSession, plano, serverResult.expiracao);
+        } else {
+          // Criar nova sessão premium
+          session = activatePremiumFromServer(createSession(trimmed), plano, serverResult.expiracao);
+        }
+        
+        setLoading(false);
+        onAccess(session);
+        return;
+      }
+    } catch (err) {
+      console.error('Erro ao verificar premium no servidor:', err);
+      // Continua com o fluxo normal de login
+    }
+    // ===== FIM DA VERIFICAÇÃO =====
+
     await new Promise(r => setTimeout(r, 600));
 
     const session = loginByEmail(trimmed);

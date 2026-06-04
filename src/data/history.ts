@@ -54,7 +54,7 @@ export interface Draw {
   id      : string;       // ex: "2026-120-K"
   date    : string;       // ISO "YYYY-MM-DD"
   time?   : string;       // ex: "10:00" | "18:00"
-  session?: 'fezada' | 'kazola';
+  session?: 'fezada' | 'kazola' | 'aqueceu' | 'eskebra';  // ALTERADO: adicionados 'aqueceu' e 'eskebra'
   numbers : number[];     // 5 números ordenados 1–90
 }
 

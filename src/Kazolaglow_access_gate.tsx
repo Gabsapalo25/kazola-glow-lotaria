@@ -333,11 +333,3 @@ export default function AccessGate({ onRegister, onClose, existingSession }: Pro
     </div>
   );
 }
-Concluído
-
-Você está sem mensagens gratuitas até 21:30
-Continue trabalhando
-
-
-
-
