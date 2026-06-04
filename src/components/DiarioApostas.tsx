@@ -3,7 +3,8 @@ import React, { useState, useEffect, useMemo } from 'react';
 import Ball from './Ball';
 import Card from './Card';
 import Modal from './Modal';
-import { UserSession } from '../lib/session';
+import { UserSession, shouldSync, updateLastSync } from '../lib/session';
+import { saveUserData, loadUserData, deleteUserData } from '../lib/apiClient';
 
 interface RegistoAposta {
   id: string;
@@ -20,6 +21,7 @@ interface RegistoAposta {
 
 interface DiarioApostasProps {
   session: UserSession;
+  onSessionUpdate?: (session: UserSession) => void;
 }
 
 const getStorageKey = (email: string) => `kazola_diario_${email}`;
@@ -27,8 +29,9 @@ const getStorageKey = (email: string) => `kazola_diario_${email}`;
 const fmtKz = (value: number) =>
   value.toLocaleString('pt-AO', { style: 'currency', currency: 'AOA' });
 
-const DiarioApostas: React.FC<DiarioApostasProps> = ({ session }) => {
+const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate }) => {
   const [registos, setRegistos] = useState<RegistoAposta[]>([]);
+  const [syncing, setSyncing] = useState(false);
   const [formData, setFormData] = useState({
     data: new Date().toISOString().split('T')[0],
     hora: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
@@ -41,8 +44,131 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session }) => {
   const [acertosTemp, setAcertosTemp] = useState<number>(0);
   const [premioTemp, setPremioTemp] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
-  // Carregar registos do localStorage
+  // ==================== SINCRONIZAÇÃO COM O SERVIDOR ====================
+
+  // Carregar registos do servidor (cross-device) + localStorage (cache)
+  const loadFromServer = async () => {
+    if (!shouldSync(session)) return;
+    
+    setSyncing(true);
+    setSyncError(null);
+    
+    try {
+      const result = await loadUserData(session.email, 'diario');
+      
+      if (result.ok && result.records) {
+        const serverRegistos: RegistoAposta[] = [];
+        
+        for (const record of result.records) {
+          try {
+            const parsedData = JSON.parse(record.data);
+            // Verifica se tem a estrutura de RegistoAposta
+            if (parsedData.id && parsedData.combinacao) {
+              serverRegistos.push(parsedData as RegistoAposta);
+            }
+          } catch (e) {
+            console.error('Erro ao fazer parse de registo do servidor:', e);
+          }
+        }
+        
+        // Carrega registos locais
+        const localKey = getStorageKey(session.email);
+        const localStored = localStorage.getItem(localKey);
+        let localRegistos: RegistoAposta[] = [];
+        if (localStored) {
+          try {
+            localRegistos = JSON.parse(localStored);
+          } catch { /* ignore */ }
+        }
+        
+        // MERGE: servidor prevalece (timestamp mais recente)
+        // Cria um mapa de registos por id
+        const mergedMap = new Map<string, RegistoAposta>();
+        
+        // Primeiro adiciona os do servidor
+        for (const r of serverRegistos) {
+          mergedMap.set(r.id, r);
+        }
+        
+        // Depois adiciona os locais (se não existirem no servidor)
+        for (const r of localRegistos) {
+          if (!mergedMap.has(r.id)) {
+            mergedMap.set(r.id, r);
+          }
+        }
+        
+        const mergedRegistos = Array.from(mergedMap.values())
+          .sort((a, b) => b.data.localeCompare(a.data) || b.hora.localeCompare(a.hora));
+        
+        setRegistos(mergedRegistos);
+        
+        // Guarda merge no localStorage
+        localStorage.setItem(localKey, JSON.stringify(mergedRegistos));
+        
+        // Actualiza timestamp de sync
+        if (onSessionUpdate) {
+          onSessionUpdate(updateLastSync(session));
+        }
+      }
+    } catch (error) {
+      console.error('Erro ao carregar do servidor:', error);
+      setSyncError('Erro ao sincronizar com o servidor');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  // Guardar registos no localStorage + servidor (se sync activo)
+  const saveRegistos = async (newRegistos: RegistoAposta[]) => {
+    // 1. Guarda no localStorage (cache)
+    localStorage.setItem(getStorageKey(session.email), JSON.stringify(newRegistos));
+    setRegistos(newRegistos);
+    
+    // 2. Sincroniza com o servidor (se activo)
+    if (shouldSync(session)) {
+      for (const registo of newRegistos) {
+        try {
+          await saveUserData(
+            session.email,
+            'diario',
+            registo.id,
+            JSON.stringify(registo)
+          );
+        } catch (error) {
+          console.error('Erro ao sincronizar registo:', registo.id, error);
+          setSyncError('Erro ao sincronizar. Os dados estão guardados localmente.');
+        }
+      }
+      
+      // Actualiza timestamp de sync
+      if (onSessionUpdate) {
+        onSessionUpdate(updateLastSync(session));
+      }
+    }
+  };
+
+  // Eliminar registo (local + servidor)
+  const deleteRegisto = async (id: string) => {
+    const filtered = registos.filter(r => r.id !== id);
+    
+    // 1. Actualiza localStorage
+    localStorage.setItem(getStorageKey(session.email), JSON.stringify(filtered));
+    setRegistos(filtered);
+    
+    // 2. Elimina do servidor (se sync activo)
+    if (shouldSync(session)) {
+      try {
+        await deleteUserData(session.email, id, 'diario');
+      } catch (error) {
+        console.error('Erro ao eliminar do servidor:', error);
+        setSyncError('Erro ao eliminar do servidor. O registo foi removido localmente.');
+      }
+    }
+  };
+
+  // Carregar registos do localStorage (fallback rápido)
   useEffect(() => {
     const key = getStorageKey(session.email);
     const stored = localStorage.getItem(key);
@@ -53,21 +179,19 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session }) => {
         /* ignore */ 
       }
     }
+    
+    // Carrega do servidor em background (cross-device)
+    loadFromServer();
   }, [session.email]);
-
-  // Guardar registos no localStorage
-  const saveRegistos = (newRegistos: RegistoAposta[]) => {
-    localStorage.setItem(getStorageKey(session.email), JSON.stringify(newRegistos));
-    setRegistos(newRegistos);
-  };
 
   // Gerar ID único
   const generateId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
   // Submeter novo registo
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setSyncError(null);
     
     const numeros = formData.combinacao.map(n => parseInt(n));
     
@@ -90,7 +214,7 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session }) => {
       notas: formData.notas,
     };
 
-    saveRegistos([novoRegisto, ...registos]);
+    await saveRegistos([novoRegisto, ...registos]);
     
     // Reset form
     setFormData({
@@ -113,10 +237,10 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session }) => {
     }
   };
 
-  const confirmarVerificacao = () => {
+  const confirmarVerificacao = async () => {
     if (!verificandoId) return;
     
-    saveRegistos(registos.map(r =>
+    const updatedRegistos = registos.map(r =>
       r.id === verificandoId
         ? { 
             ...r, 
@@ -125,21 +249,23 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session }) => {
             premioRecebido: premioTemp 
           }
         : r
-    ));
+    );
+    
+    await saveRegistos(updatedRegistos);
+    
     setVerificandoId(null);
     setAcertosTemp(0);
     setPremioTemp(0);
   };
 
   // Eliminar aposta
-  const handleEliminar = (id: string) => {
+  const handleEliminar = async (id: string) => {
     if (window.confirm('Tens a certeza que queres eliminar este registo?')) {
-      saveRegistos(registos.filter(r => r.id !== id));
+      await deleteRegisto(id);
     }
   };
 
   // Estatísticas do mês actual
-  // CORREÇÃO: getMonth() devolve 0-11, a data tem mês 1-12
   const estatisticas = useMemo(() => {
     const now = new Date();
     const mesActual = now.getMonth(); // 0-11
@@ -167,6 +293,23 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session }) => {
 
   return (
     <div className="space-y-6">
+      {/* Banner de sincronização */}
+      {syncing && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-center text-blue-700 text-sm">
+          🔄 A sincronizar com o servidor...
+        </div>
+      )}
+      {syncError && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-center text-amber-700 text-sm">
+          ⚠️ {syncError}
+        </div>
+      )}
+      {shouldSync(session) && !syncing && (
+        <div className="bg-green-50 border border-green-200 rounded-xl p-2 text-center text-green-700 text-xs">
+          ☁️ Dados sincronizados na nuvem — disponíveis em todos os dispositivos
+        </div>
+      )}
+
       {/* Cards de resumo */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="bg-white rounded-2xl ring-1 ring-neutral-200 p-4 text-center">

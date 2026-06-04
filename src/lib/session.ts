@@ -5,6 +5,7 @@
  * PREMIUM: ilimitado · sem restrições
  *
  * CORRECÇÃO: isPremium nunca vem do localStorage — é sempre validado no servidor.
+ * NOVO: syncEnabled e lastSync para cross-device
  */
 
 export const STORAGE_KEY      = 'kazola_user_session';
@@ -25,6 +26,9 @@ export interface UserSession {
   tokenActivacao     : string | null;
   verificadoNoServidor : boolean;
   ultimaVerificacao  : number | null;
+  // ===== NOVOS CAMPOS PARA CROSS-DEVICE =====
+  syncEnabled        : boolean;   // true para todos os utilizadores com email registado
+  lastSync           : number | null;  // timestamp da última sincronização
 }
 
 export function todayStr(): string {
@@ -37,12 +41,16 @@ export function loadSession(): UserSession | null {
     if (!raw) return null;
     const session = JSON.parse(raw) as UserSession;
 
-    // Migração de campos
+    // Migração de campos existentes
     if (session.plano               === undefined) session.plano               = null;
     if (session.premiumExpiracao    === undefined) session.premiumExpiracao    = null;
     if (session.tokenActivacao      === undefined) session.tokenActivacao      = null;
     if (session.verificadoNoServidor=== undefined) session.verificadoNoServidor= false;
     if (session.ultimaVerificacao   === undefined) session.ultimaVerificacao   = null;
+    
+    // ===== NOVOS CAMPOS - MIGRAÇÃO =====
+    if (session.syncEnabled         === undefined) session.syncEnabled         = false;
+    if (session.lastSync            === undefined) session.lastSync            = null;
 
     // ─── CORRECÇÃO CRÍTICA ───────────────────────────────────────
     // isPremium do localStorage nunca é fonte de verdade.
@@ -88,6 +96,9 @@ export function createSession(email: string): UserSession {
     tokenActivacao      : null,
     verificadoNoServidor: false,
     ultimaVerificacao   : null,
+    // ===== NOVOS CAMPOS =====
+    syncEnabled         : true,    // Por padrão, sync activo para todos utilizadores registados
+    lastSync            : null,
   };
   saveSession(s);
   return s;
@@ -111,6 +122,7 @@ export function activatePremiumFromServer(
     premiumExpiracao    : expiracao,
     verificadoNoServidor: true,
     ultimaVerificacao   : Date.now(),
+    // Mantém syncEnabled (cross-device activo para todos)
   };
   saveSession(updated);
   return updated;
@@ -215,4 +227,63 @@ export function loginByEmail(email: string): UserSession | null {
   // ────────────────────────────────────────────────────────────
 
   return s;
+}
+
+// ==================== NOVAS FUNÇÕES DE SINCRONIZAÇÃO ====================
+
+/**
+ * enableSync - Activa a sincronização cross-device para um utilizador
+ * Chamado após confirmação de que o email está registado no servidor
+ */
+export function enableSync(s: UserSession): UserSession {
+  if (s.syncEnabled) return s;
+  const updated = {
+    ...s,
+    syncEnabled: true,
+    lastSync: Date.now(),
+  };
+  saveSession(updated);
+  return updated;
+}
+
+/**
+ * disableSync - Desactiva a sincronização (útil em caso de erro ou logout)
+ */
+export function disableSync(s: UserSession): UserSession {
+  if (!s.syncEnabled) return s;
+  const updated = {
+    ...s,
+    syncEnabled: false,
+  };
+  saveSession(updated);
+  return updated;
+}
+
+/**
+ * updateLastSync - Actualiza o timestamp da última sincronização
+ */
+export function updateLastSync(s: UserSession): UserSession {
+  const updated = {
+    ...s,
+    lastSync: Date.now(),
+  };
+  saveSession(updated);
+  return updated;
+}
+
+/**
+ * shouldSync - Verifica se deve sincronizar (cross-device activo)
+ * Todos os utilizadores com email registado têm sync activo
+ */
+export function shouldSync(s: UserSession | null | undefined): boolean {
+  if (!s) return false;
+  return s.syncEnabled === true;
+}
+
+/**
+ * needsInitialSync - Verifica se precisa de carregar dados do servidor pela primeira vez
+ */
+export function needsInitialSync(s: UserSession | null | undefined): boolean {
+  if (!s) return false;
+  return s.syncEnabled === true && s.lastSync === null;
 }

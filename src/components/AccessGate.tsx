@@ -1,6 +1,6 @@
 /**
  * AccessGate.tsx — Popup de acesso obrigatório
- * FREE: trial 7 dias, 1 geração/dia
+ * FREE: trial 3 dias, 1 geração/dia
  * PREMIUM: upgrade pago, ilimitado
  */
 import { useState, useEffect } from 'react';
@@ -128,7 +128,7 @@ export default function AccessGate({ onAccess, reason = 'first_visit' }: Props) 
   }
 
   const reasonBanner: Record<string, { bg: string; text: string; msg: string }> = {
-    trial_expired: { bg: '#3d0000', text: '#ef9a9a', msg: '⏰ O teu trial de 7 dias expirou. Faz upgrade para continuar.' },
+    trial_expired: { bg: '#3d0000', text: '#ef9a9a', msg: '⏰ O teu trial de 3 dias expirou. Faz upgrade para continuar.' },
     daily_limit  : { bg: '#1a2f00', text: '#a5d6a7', msg: `✅ Usaste a tua geração gratuita de hoje. Volta amanhã ou faz upgrade para ilimitado.` },
   };
   const banner = reasonBanner[reason];

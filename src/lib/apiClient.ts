@@ -1,18 +1,14 @@
 // src/lib/apiClient.ts
-import historicoCompleto from '../data/historico_completo.json';
 import { type Draw } from '../data/history';
 
 // ==================== CONSTANTES ====================
 const KAZOLA_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxBUgEc7KtqbktpQXVxnEPW0t0ZkY5WHjzbptt8lX7EDgt-yMB8RX7sorh2RjLO_uu8xA/exec';
+const HISTORICO_JSON_URL = 'https://cdn.jsdelivr.net/gh/Gabsapalo25/kazola-dados@main/historico_completo.json';
 
 // ==================== HELPER — fetch sem CORS preflight ====================
-// O Google Apps Script não suporta preflight (OPTIONS).
-// Solução: enviar como text/plain — não dispara preflight, GAS recebe na mesma.
 async function gasPost<T>(payload: object): Promise<T> {
   const response = await fetch(KAZOLA_SCRIPT_URL, {
     method: 'POST',
-    // NÃO usar 'Content-Type': 'application/json' — causa preflight bloqueado
-    // text/plain é um "simple request" e não precisa de preflight
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify(payload),
   });
@@ -26,10 +22,17 @@ async function gasGet<T>(params: Record<string, string>): Promise<T> {
   return response.json();
 }
 
-// ==================== SORTEIOS (mantida) ====================
+// ==================== SORTEIOS (BUSCA DO GITHUB) ====================
 export async function fetchRealDraws(): Promise<Draw[]> {
   try {
-    console.log('📡 A carregar dados do ficheiro JSON local...');
+    console.log('📡 A carregar dados do GitHub via jsDelivr...');
+    
+    // Busca o JSON actualizado do repositório (sem cache)
+    const res = await fetch(`${HISTORICO_JSON_URL}?t=${Date.now()}`);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+    }
+    const historicoCompleto = await res.json();
 
     const drawsMap = new Map<string, Draw>();
     const now      = new Date();
@@ -74,10 +77,27 @@ export async function fetchRealDraws(): Promise<Draw[]> {
 
     console.log(`📊 Total de sorteios ÚNICOS carregados: ${draws.length}`);
     if (draws.length > 0) console.log('🎯 Último sorteio:', draws[0]);
+    
+    // Guardar no localStorage para cache offline
+    try {
+      localStorage.setItem('kazola_last_draws', JSON.stringify(draws));
+      localStorage.setItem('kazola_last_draws_date', new Date().toISOString());
+    } catch { /* silent */ }
+    
     return draws;
 
   } catch (error) {
-    console.error('❌ Erro ao ler dados do ficheiro JSON:', error);
+    console.error('❌ Erro ao buscar dados do GitHub:', error);
+    
+    // Fallback: tenta carregar do localStorage (cache)
+    try {
+      const cached = localStorage.getItem('kazola_last_draws');
+      if (cached) {
+        console.log('📦 A usar dados em cache do localStorage');
+        return JSON.parse(cached);
+      }
+    } catch { /* silent */ }
+    
     return [];
   }
 }
@@ -169,6 +189,101 @@ export async function adminCheck(key: string): Promise<{
     return await gasPost({ action: 'adminCheck', key });
   } catch (error) {
     console.error('Erro em adminCheck:', error);
+    return { ok: false, error: 'Erro de conexão com o servidor' };
+  }
+}
+
+// ==================== NOVAS FUNÇÕES DE SINCRONIZAÇÃO (CROSS-DEVICE) ====================
+
+export interface UserDataRecord {
+  data_type: string;
+  record_id: string;
+  data: string;
+  timestamp: number;
+}
+
+export interface SaveUserDataResult {
+  ok: boolean;
+  saved?: boolean;
+  record_id?: string;
+  data_type?: string;
+  error?: string;
+}
+
+export interface LoadUserDataResult {
+  ok: boolean;
+  records?: UserDataRecord[];
+  error?: string;
+}
+
+export interface DeleteUserDataResult {
+  ok: boolean;
+  deleted?: boolean;
+  record_id?: string;
+  error?: string;
+}
+
+export async function saveUserData(
+  email: string,
+  dataType: string,
+  recordId: string,
+  data: any,
+): Promise<SaveUserDataResult> {
+  try {
+    const jsonData = typeof data === 'string' ? data : JSON.stringify(data);
+    const result = await gasPost<SaveUserDataResult>({
+      action: 'saveUserData',
+      email,
+      data_type: dataType,
+      record_id: recordId,
+      data: jsonData,
+      timestamp: Date.now(),
+    });
+    return result;
+  } catch (error) {
+    console.error('Erro em saveUserData:', error);
+    return { ok: false, error: 'Erro de conexão com o servidor' };
+  }
+}
+
+export async function loadUserData(
+  email: string,
+  dataType?: string,
+): Promise<LoadUserDataResult> {
+  try {
+    const params: Record<string, string> = {
+      action: 'loadUserData',
+      email,
+    };
+    if (dataType) {
+      params.data_type = dataType;
+    }
+    const result = await gasGet<LoadUserDataResult>(params);
+    return result;
+  } catch (error) {
+    console.error('Erro em loadUserData:', error);
+    return { ok: false, error: 'Erro de conexão com o servidor' };
+  }
+}
+
+export async function deleteUserData(
+  email: string,
+  recordId: string,
+  dataType?: string,
+): Promise<DeleteUserDataResult> {
+  try {
+    const payload: any = {
+      action: 'deleteUserData',
+      email,
+      record_id: recordId,
+    };
+    if (dataType) {
+      payload.data_type = dataType;
+    }
+    const result = await gasPost<DeleteUserDataResult>(payload);
+    return result;
+  } catch (error) {
+    console.error('Erro em deleteUserData:', error);
     return { ok: false, error: 'Erro de conexão com o servidor' };
   }
 }

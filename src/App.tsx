@@ -62,6 +62,8 @@ import {
   shouldVerifyWithServer,
   isPremiumValid,
   activatePremiumFromServer,
+  shouldSync,
+  updateLastSync,
   type UserSession,
 } from './lib/session';
 
@@ -171,11 +173,11 @@ export default function App() {
   const [reflectionDays, setReflectionDays] = useState<number | null>(null);
   const [showReflectionConfirm, setShowReflectionConfirm] = useState(false);
 
-  // ── Dados (APENAS API REAL - SEM FALLBACK) ───────────────────────────
-  const [draws, setDraws] = useState<Draw[]>(() => loadCachedDraws() || []);
-  const [usingOfficial, setUsingOfficial] = useState(false);
+  // ── Dados dos sorteios ──────────────────────────────────────────────
+  const [sorteios, setSorteios] = useState<Draw[]>([]);
   const [loadingApi, setLoadingApi] = useState(true);
   const [apiError, setApiError] = useState(false);
+  const [temSorteioHoje, setTemSorteioHoje] = useState(false);
 
   // ── Gerador ─────────────────────────────────────────────────────────
   const [strategy, setStrategy] = useState<GenerationStrategy>('equilibrado');
@@ -190,10 +192,7 @@ export default function App() {
 
   // ── Histórico ───────────────────────────────────────────────────────
   const [windowSize, setWindowSize] = useState(60);
-  const [activeDraw, setActiveDraw] = useState<Draw | null>(() => {
-    const cached = loadCachedDraws();
-    return cached?.[0] || null;
-  });
+  const [activeDraw, setActiveDraw] = useState<Draw | null>(null);
   const [histPage, setHistPage] = useState(0);
   const HIST_PAGE_SIZE = 20;
 
@@ -273,6 +272,8 @@ export default function App() {
       tokenActivacao: null,
       verificadoNoServidor: false,
       ultimaVerificacao: null,
+      syncEnabled: true,
+      lastSync: null,
     };
     saveSession(newSession);
     setSession(newSession);
@@ -360,29 +361,53 @@ export default function App() {
     }
   }, [timerAtivo, timerMinutos]);
 
-  // Buscar dados da API real (APENAS REAL, SEM FALLBACK)
+  // ── Buscar dados da API ─────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoadingApi(true);
+      setApiError(false);
+      
       try {
-        const real = await fetchRealDraws();
-        if (!cancelled && real.length) {
-          setDraws(real);
-          setActiveDraw(real[0]);
-          setUsingOfficial(true);
-          saveCachedDraws(real);
+        const result = await fetchRealDraws();
+        
+        if (!cancelled && result.draws.length > 0) {
+          setSorteios(result.draws);
+          setActiveDraw(result.draws[0]);
+          setTemSorteioHoje(result.hasToday);
+          
+          // Guarda em cache para uso offline
+          saveCachedDraws(result.draws);
+        } else if (!cancelled) {
+          // Tenta carregar do cache se API falhou
+          const cached = loadCachedDraws();
+          if (cached && cached.length > 0) {
+            setSorteios(cached);
+            setActiveDraw(cached[0]);
+            setTemSorteioHoje(false);
+            setApiError(true);
+          }
         }
       } catch (error) {
-        console.error('Erro ao buscar dados da API:', error);
+        console.error('Erro ao buscar dados:', error);
         setApiError(true);
+        
+        // Fallback para cache apenas se existir
+        const cached = loadCachedDraws();
+        if (cached && cached.length > 0) {
+          setSorteios(cached);
+          setActiveDraw(cached[0]);
+          setTemSorteioHoje(false);
+        }
       }
+      
       setLoadingApi(false);
     })();
     return () => { cancelled = true; };
   }, []);
 
   // Estatísticas
+  const draws = sorteios;
   const freq = useMemo(() => computeFrequency(draws.slice(0, windowSize)), [draws, windowSize]);
   const weights = useMemo(() => freq.freq, [freq]);
   const hotCold = useMemo(() => hotColdRanking(draws, windowSize), [draws, windowSize]);
@@ -547,7 +572,12 @@ export default function App() {
   }
 
   function handleUpgraded(updatedSession: UserSession) {
-    setSession(updatedSession);
+    const finalSession = { 
+      ...updatedSession, 
+      syncEnabled: session?.syncEnabled ?? true,
+      lastSync: session?.lastSync ?? null,
+    };
+    setSession(finalSession);
     setShowUpgrade(false);
     setShowTokenActivation(false);
     showToast('Parabéns! Agora você é Premium!', 'success');
@@ -569,9 +599,16 @@ export default function App() {
       console.error('Erro ao verificar premium:', error);
     }
     
-    setSession(s);
+    const syncedSession = { ...s, syncEnabled: true, lastSync: null };
+    saveSession(syncedSession);
+    setSession(syncedSession);
     setShowGate(false);
   }
+
+  const handleSessionUpdate = useCallback((updatedSession: UserSession) => {
+    setSession(updatedSession);
+    saveSession(updatedSession);
+  }, []);
 
   const fontClass = fontSize === 'normal' ? 'font-sys-normal' : fontSize === 'large' ? 'font-sys-large' : 'font-sys-xlarge';
   const histSlice = draws.slice(histPage * HIST_PAGE_SIZE, (histPage + 1) * HIST_PAGE_SIZE);
@@ -584,6 +621,10 @@ export default function App() {
     setMobileMenuOpen(false);
     document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth' });
   };
+
+  // Determina o último sorteio disponível
+  const ultimoSorteio = activeDraw;
+  const temDadosHoje = temSorteioHoje;
 
   return (
     <div className={`min-h-screen ${fontClass} ${highContrast ? 'high-contrast' : ''}`}>
@@ -780,13 +821,17 @@ export default function App() {
       </div>
 
       {/* ── BANNER DE ORIGEM DOS DADOS ───────────────────────── */}
-      <div className={`${!apiError && draws.length > 0 ? 'bg-emerald-50' : 'bg-amber-50'} border-b border-neutral-200`}>
-        <div className="max-w-6xl mx-auto px-4 py-2 text-xs md:text-sm flex items-center gap-2">
-          <span aria-hidden>{!apiError && draws.length > 0 ? '✅' : '🕐'}</span>
+      <div className={`${!apiError && draws.length > 0 ? (temDadosHoje ? 'bg-emerald-50' : 'bg-amber-50') : 'bg-amber-50'} border-b border-neutral-200`}>
+        <div className="max-w-6xl mx-auto px-4 py-2 text-xs md:text-sm flex items-center gap-2 flex-wrap">
+          <span aria-hidden>{!apiError && draws.length > 0 ? (temDadosHoje ? '✅' : '⚠️') : '🕐'}</span>
           {loadingApi ? (
             <span>A carregar dados da API oficial…</span>
           ) : !apiError && draws.length > 0 ? (
-            <span>✅ Dados reais da API oficial da Lotaria Nacional.</span>
+            temDadosHoje ? (
+              <span>✅ Dados reais da API oficial da Lotaria Nacional.</span>
+            ) : (
+              <span>⚠️ Último sorteio disponível: {activeDraw ? formatDate(activeDraw.date) : 'N/A'} — o sorteio de hoje ainda não foi actualizado.</span>
+            )
           ) : (
             <span>🕐 A aguardar actualização dos dados.</span>
           )}
@@ -839,18 +884,30 @@ export default function App() {
           </div>
         </div>
 
-        {/* Último sorteio */}
-        {activeDraw && (
+        {/* ── ÚLTIMO SORTEIO (VERSÃO CORRIGIDA) ── */}
+        {ultimoSorteio && (
           <Card
-            title={`Último sorteio · ${formatDate(activeDraw.date)}${activeDraw.time ? ' · ' + activeDraw.time : ''}`}
-            subtitle={`Concurso ${activeDraw.id}${activeDraw.session ? ' · ' + (activeDraw.session === 'fezada' ? 'Fezada' : activeDraw.session === 'aqueceu' ? 'Aqueceu' : activeDraw.session === 'kazola' ? 'Kazola' : 'Eskebra') : ''} — ${PICK_SIZE} números de 1 a ${TOTAL_NUMBERS}`}
+            title={`${temDadosHoje ? 'Último sorteio' : 'Último sorteio disponível'} · ${formatDate(ultimoSorteio.date)}${ultimoSorteio.time ? ' · ' + ultimoSorteio.time : ''}`}
+            subtitle={temDadosHoje 
+              ? `Concurso ${ultimoSorteio.id}${ultimoSorteio.session ? ' · ' + (ultimoSorteio.session === 'fezada' ? 'Fezada' : ultimoSorteio.session === 'aqueceu' ? 'Aqueceu' : ultimoSorteio.session === 'kazola' ? 'Kazola' : 'Eskebra') : ''} — ${PICK_SIZE} números de 1 a ${TOTAL_NUMBERS}`
+              : `⚠️ Resultado do último sorteio registado (${formatDate(ultimoSorteio.date)}). O sorteio de hoje ainda não está disponível na base de dados.`}
             icon={<span>📅</span>}
           >
             <div className="flex flex-wrap items-center gap-3 justify-center md:justify-start py-4">
-              {activeDraw.numbers.map((n, i) => (
+              {ultimoSorteio.numbers.map((n, i) => (
                 <Ball key={n} n={n} animated size="lg" delay={i * 120} />
               ))}
             </div>
+            
+            {/* Aviso claro quando não são dados de hoje */}
+            {!temDadosHoje && (
+              <div className="mb-4 p-4 rounded-xl bg-amber-100 border border-amber-300 text-amber-800 text-sm text-center">
+                <span className="font-bold block mb-1">⏳ Dados históricos</span>
+                Estes são os números do último sorteio disponível na nossa base de dados. 
+                O resultado do sorteio de hoje será exibido assim que a Lotaria Nacional o disponibilizar.
+              </div>
+            )}
+            
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">
               <div className="p-4 rounded-2xl bg-neutral-900 text-white text-center">
                 <div className="text-xs uppercase text-neutral-300">Prémio máximo</div>
@@ -1075,7 +1132,7 @@ export default function App() {
 
             {/* Diário de Apostas */}
             {session?.isPremium || premium.isActive ? (
-              <DiarioApostas session={session!} />
+              <DiarioApostas session={session!} onSessionUpdate={handleSessionUpdate} />
             ) : (
               <Card title="📓 Diário de Apostas" icon={<span>📓</span>}>
                 <div className="text-center py-6 text-neutral-500">
@@ -1095,6 +1152,7 @@ export default function App() {
                 hotCold={hotCold}
                 gaps={gaps}
                 draws={draws}
+                onSessionUpdate={handleSessionUpdate}
               />
             ) : (
               <Card title="📅 Plano Semanal" icon={<span>📅</span>}>

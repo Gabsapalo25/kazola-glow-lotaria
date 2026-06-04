@@ -2,9 +2,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import Ball from './Ball';
 import Card from './Card';
-import { UserSession } from '../lib/session';
+import { UserSession, shouldSync, updateLastSync } from '../lib/session';
 import { generateLine } from '../lib/generator';
 import { Draw } from '../data/history';
+import { saveUserData, loadUserData, deleteUserData } from '../lib/apiClient';
 
 interface PlanoCombinacao {
   id: number;
@@ -30,6 +31,7 @@ interface PlanoSemanalProps {
   hotCold: { hot: number[]; cold: number[] };
   gaps: { n: number; gap: number }[];
   draws: Draw[];
+  onSessionUpdate?: (session: UserSession) => void;
 }
 
 const fmtKz = (value: number) => 
@@ -92,27 +94,115 @@ const gerarFallback = (exclude: number[] = []): number[] => {
   return nums.sort((a, b) => a - b);
 };
 
-const PlanoSemanal: React.FC<PlanoSemanalProps> = ({ session, weights, hotCold, gaps, draws }) => {
+const PlanoSemanal: React.FC<PlanoSemanalProps> = ({ 
+  session, 
+  weights, 
+  hotCold, 
+  gaps, 
+  draws,
+  onSessionUpdate 
+}) => {
   const [orcamento, setOrcamento] = useState<number>(1000);
   const [valorPorAposta, setValorPorAposta] = useState<number>(50);
   const [planoActual, setPlanoActual] = useState<PlanoSemana | null>(null);
   const [mostrarConfig, setMostrarConfig] = useState<boolean>(false);
   const [copiado, setCopiado] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
+  const [syncing, setSyncing] = useState<boolean>(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   const semanaActualKey = getCurrentWeekKey();
 
-  // Carregar plano existente
-  useEffect(() => {
-    const key = getStorageKey(session.email, semanaActualKey);
-    const stored = localStorage.getItem(key);
-    if (stored) {
-      try {
-        setPlanoActual(JSON.parse(stored));
-      } catch (e) {
-        console.error('Erro ao carregar plano:', e);
+  // ==================== SINCRONIZAÇÃO COM O SERVIDOR ====================
+
+  // Carregar plano do servidor (cross-device)
+  const loadPlanoFromServer = async () => {
+    if (!shouldSync(session)) return;
+    
+    setSyncing(true);
+    setSyncError(null);
+    
+    try {
+      const result = await loadUserData(session.email, 'plano_semanal');
+      
+      if (result.ok && result.records) {
+        for (const record of result.records) {
+          if (record.record_id === semanaActualKey) {
+            try {
+              const serverPlano = JSON.parse(record.data) as PlanoSemana;
+              if (serverPlano && serverPlano.combinacoes) {
+                setPlanoActual(serverPlano);
+                // Guarda no localStorage como cache
+                const localKey = getStorageKey(session.email, semanaActualKey);
+                localStorage.setItem(localKey, JSON.stringify(serverPlano));
+                break;
+              }
+            } catch (e) {
+              console.error('Erro ao fazer parse do plano do servidor:', e);
+            }
+          }
+        }
       }
+    } catch (error) {
+      console.error('Erro ao carregar plano do servidor:', error);
+      setSyncError('Erro ao sincronizar com o servidor');
+    } finally {
+      setSyncing(false);
     }
+  };
+
+  // Guardar plano no servidor
+  const savePlanoToServer = async (plano: PlanoSemana) => {
+    if (!shouldSync(session)) return;
+    
+    try {
+      await saveUserData(
+        session.email,
+        'plano_semanal',
+        plano.semana,
+        JSON.stringify(plano)
+      );
+      
+      // Actualiza timestamp de sync
+      if (onSessionUpdate) {
+        onSessionUpdate(updateLastSync(session));
+      }
+    } catch (error) {
+      console.error('Erro ao guardar plano no servidor:', error);
+      setSyncError('Erro ao sincronizar. O plano está guardado localmente.');
+    }
+  };
+
+  // Eliminar plano do servidor
+  const deletePlanoFromServer = async (semana: string) => {
+    if (!shouldSync(session)) return;
+    
+    try {
+      await deleteUserData(session.email, semana, 'plano_semanal');
+    } catch (error) {
+      console.error('Erro ao eliminar plano do servidor:', error);
+    }
+  };
+
+  // Carregar plano existente (local + servidor)
+  useEffect(() => {
+    const loadPlano = async () => {
+      // Primeiro, carrega do localStorage (rápido)
+      const localKey = getStorageKey(session.email, semanaActualKey);
+      const stored = localStorage.getItem(localKey);
+      if (stored) {
+        try {
+          setPlanoActual(JSON.parse(stored));
+        } catch (e) {
+          console.error('Erro ao carregar plano local:', e);
+        }
+      }
+      
+      // Depois, carrega do servidor (cross-device) e sobrepõe se mais recente
+      await loadPlanoFromServer();
+    };
+    
+    loadPlano();
   }, [session.email, semanaActualKey]);
 
   const totalApostasCalculado = Math.floor(orcamento / valorPorAposta);
@@ -124,7 +214,6 @@ const PlanoSemanal: React.FC<PlanoSemanalProps> = ({ session, weights, hotCold, 
     metodoEscolhido: 'equilibrado' | 'frequencia' | 'montecarlo' | 'aleatorio'
   ): number[] => {
     try {
-      // Tentar gerar com o método escolhido
       let numeros: number[] = [];
       
       if (metodoEscolhido === 'aleatorio') {
@@ -133,7 +222,6 @@ const PlanoSemanal: React.FC<PlanoSemanalProps> = ({ session, weights, hotCold, 
         const result = generateLine(weights, metodoEscolhido, { hotCold, gaps, draws });
         numeros = result?.numbers || [];
         
-        // Se falhou, usar fallback
         if (numeros.length === 0) {
           console.warn(`Falha no método ${metodoEscolhido}, usando fallback`);
           numeros = gerarFallback();
@@ -170,14 +258,12 @@ const PlanoSemanal: React.FC<PlanoSemanalProps> = ({ session, weights, hotCold, 
     
     setLoading(true);
     
-    // Pequeno delay para UI não travar
     await new Promise(resolve => setTimeout(resolve, 100));
 
     const apostasPorDia = Math.floor(totalApostasCalculado / 7);
     const resto = totalApostasCalculado % 7;
     const apostasPorDiaLista = diasDaSemana.map((_, idx) => apostasPorDia + (idx < resto ? 1 : 0));
     
-    // Distribuição dos métodos
     const metodos: ('equilibrado' | 'frequencia' | 'montecarlo' | 'aleatorio')[] = [];
     for (let i = 0; i < totalApostasCalculado; i++) {
       const rand = Math.random() * 100;
@@ -232,13 +318,22 @@ const PlanoSemanal: React.FC<PlanoSemanalProps> = ({ session, weights, hotCold, 
       geradoEm: Date.now(),
     };
     
-    const key = getStorageKey(session.email, semanaActualKey);
-    localStorage.setItem(key, JSON.stringify(novoPlano));
+    // Guarda no localStorage
+    const localKey = getStorageKey(session.email, semanaActualKey);
+    localStorage.setItem(localKey, JSON.stringify(novoPlano));
     setPlanoActual(novoPlano);
+    
+    // Guarda no servidor (cross-device)
+    await savePlanoToServer(novoPlano);
+    
     setMostrarConfig(false);
   };
 
-  const gerarNovoPlano = () => {
+  const gerarNovoPlano = async () => {
+    // Se já existe plano para esta semana, elimina do servidor
+    if (planoActual && planoActual.semana === semanaActualKey) {
+      await deletePlanoFromServer(semanaActualKey);
+    }
     setMostrarConfig(true);
   };
 
@@ -288,6 +383,23 @@ const PlanoSemanal: React.FC<PlanoSemanalProps> = ({ session, weights, hotCold, 
   if (!planoActual || mostrarConfig) {
     return (
       <Card title="📅 Gerar Plano Semanal" icon={<span>📅</span>}>
+        {/* Banner de sincronização */}
+        {syncing && (
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-4 text-center text-blue-700 text-sm">
+            🔄 A sincronizar com o servidor...
+          </div>
+        )}
+        {syncError && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 text-center text-amber-700 text-sm">
+            ⚠️ {syncError}
+          </div>
+        )}
+        {shouldSync(session) && !syncing && (
+          <div className="bg-green-50 border border-green-200 rounded-xl p-2 mb-4 text-center text-green-700 text-xs">
+            ☁️ Planos sincronizados na nuvem — disponíveis em todos os dispositivos
+          </div>
+        )}
+
         <p className="text-neutral-600 mb-6 text-sm">
           Define o teu orçamento semanal e o valor por aposta. O sistema irá gerar um plano equilibrado para toda a semana.
         </p>
@@ -357,6 +469,18 @@ const PlanoSemanal: React.FC<PlanoSemanalProps> = ({ session, weights, hotCold, 
   // ==================== PLANO GERADO ====================
   return (
     <div className="space-y-6">
+      {/* Banner de sincronização */}
+      {syncing && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-2 text-center text-blue-700 text-xs">
+          🔄 A sincronizar...
+        </div>
+      )}
+      {syncError && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-2 text-center text-amber-700 text-xs">
+          ⚠️ {syncError}
+        </div>
+      )}
+
       <Card title="📅 Plano Semanal" icon={<span>📅</span>}>
         <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
           <div>
