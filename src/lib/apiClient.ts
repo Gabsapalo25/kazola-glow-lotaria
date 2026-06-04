@@ -3,7 +3,7 @@ import historicoCompleto from '../data/historico_completo.json';
 import { type Draw } from '../data/history';
 
 // ==================== CONSTANTES ====================
-const KAZOLA_SCRIPT_URL = 'INSERIR_URL_DO_WEB_APP_AQUI'; // Substituir após deploy do Code.gs
+const KAZOLA_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxBUgEc7KtqbktpQXVxnEPW0t0ZkY5WHjzbptt8lX7EDgt-yMB8RX7sorh2RjLO_uu8xA/exec'; // Substituir após deploy do Code.gs
 
 // ==================== FUNÇÃO EXISTENTE (mantida) ====================
 export async function fetchRealDraws(): Promise<Draw[]> {
