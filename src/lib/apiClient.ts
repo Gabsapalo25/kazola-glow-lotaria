@@ -23,11 +23,10 @@ async function gasGet<T>(params: Record<string, string>): Promise<T> {
 }
 
 // ==================== SORTEIOS (BUSCA DO GITHUB) ====================
-export async function fetchRealDraws(): Promise<Draw[]> {
+export async function fetchRealDraws(): Promise<{ draws: Draw[]; hasToday: boolean }> {
   try {
     console.log('📡 A carregar dados do GitHub via jsDelivr...');
     
-    // Busca o JSON actualizado do repositório (sem cache)
     const res = await fetch(`${HISTORICO_JSON_URL}?t=${Date.now()}`);
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}: ${res.statusText}`);
@@ -78,27 +77,28 @@ export async function fetchRealDraws(): Promise<Draw[]> {
     console.log(`📊 Total de sorteios ÚNICOS carregados: ${draws.length}`);
     if (draws.length > 0) console.log('🎯 Último sorteio:', draws[0]);
     
-    // Guardar no localStorage para cache offline
     try {
       localStorage.setItem('kazola_last_draws', JSON.stringify(draws));
       localStorage.setItem('kazola_last_draws_date', new Date().toISOString());
     } catch { /* silent */ }
     
-    return draws;
+    const todayStr = new Date().toISOString().split('T')[0];
+    const hasToday = draws.length > 0 && draws[0].date === todayStr;
+    
+    return { draws, hasToday };
 
   } catch (error) {
     console.error('❌ Erro ao buscar dados do GitHub:', error);
     
-    // Fallback: tenta carregar do localStorage (cache)
     try {
       const cached = localStorage.getItem('kazola_last_draws');
       if (cached) {
         console.log('📦 A usar dados em cache do localStorage');
-        return JSON.parse(cached);
+        return { draws: JSON.parse(cached), hasToday: false };
       }
     } catch { /* silent */ }
     
-    return [];
+    return { draws: [], hasToday: false };
   }
 }
 
@@ -193,7 +193,7 @@ export async function adminCheck(key: string): Promise<{
   }
 }
 
-// ==================== NOVAS FUNÇÕES DE SINCRONIZAÇÃO (CROSS-DEVICE) ====================
+// ==================== SINCRONIZAÇÃO CROSS-DEVICE ====================
 
 export interface UserDataRecord {
   data_type: string;
