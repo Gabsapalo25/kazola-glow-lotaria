@@ -6,6 +6,7 @@
  */
 
 import { useState, useRef, useEffect } from 'react';
+import avatarBot from '../assets/avatar-bot.webp';
 import { UserSession, trialDaysLeft } from '../lib/session';
 
 interface Message {
@@ -551,7 +552,7 @@ export default function ChatBot({ session, onUpgrade, onLogin, onOpenModal, onSc
         ) : (
           <div style={{ position: 'relative', width: 60, height: 60 }}>
             <img
-              src="/avatar-bot.webp"
+              src={avatarBot}
               alt="Assistente KazolaGlow"
               style={{
                 width: 60,
@@ -671,7 +672,7 @@ export default function ChatBot({ session, onUpgrade, onLogin, onOpenModal, onSc
           }}>
             <div style={{ position: 'relative', width: 44, height: 44, flexShrink: 0 }}>
               <img
-                src="/avatar-bot.webp"
+                src={avatarBot}
                 alt="Assistente KazolaGlow"
                 style={{
                   width: 44,
@@ -746,7 +747,7 @@ export default function ChatBot({ session, onUpgrade, onLogin, onOpenModal, onSc
                 {m.from === 'bot' && (
                   <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}>
                     <img
-                      src="/avatar-bot.webp"
+                      src={avatarBot}
                       alt=""
                       style={{
                         width: 32,
@@ -793,7 +794,7 @@ export default function ChatBot({ session, onUpgrade, onLogin, onOpenModal, onSc
             {busy && (
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}>
                 <img
-                  src="/avatar-bot.webp"
+                  src={avatarBot}
                   alt=""
                   style={{
                     width: 32,
