@@ -11,6 +11,7 @@ import TokenActivation from './components/TokenActivation';
 import DiarioApostas from './components/DiarioApostas';
 import PlanoSemanal from './components/PlanoSemanal';
 import RelatorioMensal from './components/RelatorioMensal';
+import ChatBot from './components/ChatBot';
 import {
   TOTAL_NUMBERS,
   PICK_SIZE,
@@ -148,6 +149,23 @@ export default function App() {
   const showToast = useCallback((msg: string, type: 'error' | 'success' | 'info' = 'info') => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 4000);
+  }, []);
+
+  // ── OFFLINE DETECTION ────────────────────────────────────
+  const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
+  const [offlineBannerDismissed, setOfflineBannerDismissed] = useState(false);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
   }, []);
 
   // ── Acessibilidade / preferências ───────────────────────────────────
@@ -368,6 +386,18 @@ export default function App() {
       setLoadingApi(true);
       setApiError(false);
       
+      // Se estiver offline, usa cache imediatamente
+      if (!isOnline) {
+        const cached = loadCachedDraws();
+        if (cached && cached.length > 0) {
+          setSorteios(cached);
+          setActiveDraw(cached[0]);
+          setTemSorteioHoje(false);
+          setLoadingApi(false);
+          return;
+        }
+      }
+      
       try {
         const result = await fetchRealDraws();
         
@@ -404,7 +434,7 @@ export default function App() {
       setLoadingApi(false);
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [isOnline]);
 
   // Estatísticas
   const draws = sorteios;
@@ -619,17 +649,67 @@ export default function App() {
 
   const scrollToSection = (sectionId: string) => {
     setMobileMenuOpen(false);
-    document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth' });
+    const element = document.getElementById(sectionId);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth' });
+    }
   };
 
   // Determina o último sorteio disponível
   const ultimoSorteio = activeDraw;
   const temDadosHoje = temSorteioHoje;
 
+  // Handler para o ChatBot navegar para qualquer secção
+  const handleChatScrollTo = useCallback((sectionId: string) => {
+    if (sectionId === 'premios') {
+      setTab('premios');
+      setTimeout(() => {
+        const element = document.getElementById('premios');
+        if (element) element.scrollIntoView({ behavior: 'smooth' });
+      }, 100);
+      return;
+    }
+    
+    if (sectionId === 'gerador' || sectionId === 'estatisticas' || sectionId === 'historico' || 
+        sectionId === 'diario' || sectionId === 'plano_semanal' || sectionId === 'relatorio') {
+      setTab('loto');
+      setTimeout(() => {
+        const element = document.getElementById(sectionId);
+        if (element) element.scrollIntoView({ behavior: 'smooth' });
+      }, 100);
+      return;
+    }
+    
+    scrollToSection(sectionId);
+  }, [scrollToSection]);
+
+  // Handler para o ChatBot abrir modais
+  const handleChatOpenModal = useCallback((modal: 'terms' | 'privacy' | 'responsible') => {
+    if (modal === 'responsible') setShowResponsible(true);
+    if (modal === 'terms') setShowTerms(true);
+    if (modal === 'privacy') setShowPrivacy(true);
+  }, []);
+
   return (
     <div className={`min-h-screen ${fontClass} ${highContrast ? 'high-contrast' : ''}`}>
 
-      {/* ── AccessGate — obrigatório antes de gerar ──────────────── */}
+      {/* ── OFFLINE BANNER ── */}
+      {!isOnline && !offlineBannerDismissed && (
+        <div className="fixed top-0 left-0 right-0 z-50 bg-amber-500 text-black text-center py-2 px-4 text-sm flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span>📶</span>
+            <span>Sem ligação à internet — a mostrar dados da última visita</span>
+          </div>
+          <button 
+            onClick={() => setOfflineBannerDismissed(true)}
+            className="ml-4 px-2 py-1 bg-black/20 rounded-lg hover:bg-black/30 transition"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* ── AccessGate ── */}
       {showGate && (
         <AccessGate
           reason={gateReason}
@@ -637,7 +717,7 @@ export default function App() {
         />
       )}
 
-      {/* ── Upgrade Modal ─────────────────────────────────────────── */}
+      {/* ── Upgrade Modal ── */}
       {showUpgrade && session && (
         <UpgradeModal
           session={session}
@@ -646,7 +726,7 @@ export default function App() {
         />
       )}
 
-      {/* ── Token Activation Modal ─────────────────────────────────── */}
+      {/* ── Token Activation Modal ── */}
       {showTokenActivation && session && (
         <TokenActivation
           session={session}
@@ -655,7 +735,7 @@ export default function App() {
         />
       )}
 
-      {/* ── Verificação de idade ─────────────────────────────────── */}
+      {/* ── Verificação de idade ── */}
       {!ageOk && (
         <div className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl max-w-lg w-full p-8 text-center shadow-2xl">
@@ -733,7 +813,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── Header com LOGO ──────────────────────────────────────────────── */}
+      {/* ── Header com LOGO ── */}
       <header className="bg-white border-b border-neutral-200 sticky top-0 z-30 bg-white/95 backdrop-blur">
         <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between gap-4">
           <a href="#inicio" className="flex items-center gap-3">
@@ -748,7 +828,6 @@ export default function App() {
             </div>
           </a>
 
-          {/* Desktop Menu */}
           <nav className="hidden md:flex items-center gap-1 font-semibold text-neutral-700">
             <button onClick={() => { setTab('loto'); scrollToSection('gerador'); }}
               className="px-3 py-2 rounded-xl hover:bg-neutral-100">
@@ -777,7 +856,6 @@ export default function App() {
             <PremiumHeaderButton onLoginClick={() => setShowLogin(true)} />
           </nav>
 
-          {/* Mobile Menu Button */}
           <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)} className="md:hidden p-2 rounded-lg hover:bg-neutral-100 transition">
             <svg className="w-6 h-6 text-neutral-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               {mobileMenuOpen ? (
@@ -789,7 +867,6 @@ export default function App() {
           </button>
         </div>
 
-        {/* Mobile Menu Dropdown */}
         {mobileMenuOpen && (
           <div className="md:hidden bg-white border-t border-neutral-200 py-2 px-4 shadow-lg">
             <div className="flex flex-col gap-1">
@@ -807,7 +884,7 @@ export default function App() {
         )}
       </header>
 
-      {/* ── Disclaimer legal ────────────────────────────────────── */}
+      {/* ── Disclaimer legal ── */}
       <div className="bg-amber-50 border-y border-amber-200">
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-start gap-3 text-amber-900">
           <span aria-hidden className="text-xl leading-none mt-0.5">⚠️</span>
@@ -820,7 +897,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── BANNER DE ORIGEM DOS DADOS ───────────────────────── */}
+      {/* ── BANNER DE ORIGEM DOS DADOS ── */}
       <div className={`${!apiError && draws.length > 0 ? (temDadosHoje ? 'bg-emerald-50' : 'bg-amber-50') : 'bg-amber-50'} border-b border-neutral-200`}>
         <div className="max-w-6xl mx-auto px-4 py-2 text-xs md:text-sm flex items-center gap-2 flex-wrap">
           <span aria-hidden>{!apiError && draws.length > 0 ? (temDadosHoje ? '✅' : '⚠️') : '🕐'}</span>
@@ -849,7 +926,7 @@ export default function App() {
         />
       )}
 
-      {/* ── CABEÇALHO HERO DISTINTO POR TAB ── */}
+      {/* ── CABEÇALHO HERO ── */}
       <div className="relative overflow-hidden py-8 px-4" style={{ background: header.bg }}>
         <div className="max-w-6xl mx-auto text-center">
           <div className="inline-block px-3 py-1 rounded-full text-xs font-bold mb-4" style={{ background: header.accent, color: '#000' }}>
@@ -862,10 +939,10 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── MAIN ─────────────────────────────────────────────────── */}
+      {/* ── MAIN ── */}
       <main id="inicio" className="max-w-6xl mx-auto px-4 py-8 md:py-12 space-y-8">
 
-        {/* ── BARRA DE CONTROLO (Selector de tempo no topo) ── */}
+        {/* ── BARRA DE CONTROLO ── */}
         <div className="bg-gradient-to-r from-neutral-50 to-white rounded-2xl p-4 shadow-sm border border-neutral-200">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-3">
@@ -884,7 +961,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* ── ÚLTIMO SORTEIO (VERSÃO CORRIGIDA) ── */}
+        {/* ── ÚLTIMO SORTEIO ── */}
         {ultimoSorteio && (
           <Card
             title={`${temDadosHoje ? 'Último sorteio' : 'Último sorteio disponível'} · ${formatDate(ultimoSorteio.date)}${ultimoSorteio.time ? ' · ' + ultimoSorteio.time : ''}`}
@@ -899,7 +976,6 @@ export default function App() {
               ))}
             </div>
             
-            {/* Aviso claro quando não são dados de hoje */}
             {!temDadosHoje && (
               <div className="mb-4 p-4 rounded-xl bg-amber-100 border border-amber-300 text-amber-800 text-sm text-center">
                 <span className="font-bold block mb-1">⏳ Dados históricos</span>
@@ -942,7 +1018,7 @@ export default function App() {
           </Card>
         )}
 
-        {/* ── Tabs ──────────────────────────────────────────────────── */}
+        {/* ── Tabs ── */}
         <div className="flex gap-3 border-b border-neutral-200 pb-0">
           <button
             onClick={() => setTab('loto')}
@@ -976,194 +1052,216 @@ export default function App() {
         {/* ═══════════ TAB: LOTO ═══════════════════════════════════ */}
         {tab === 'loto' && (
           <>
-            {/* Gerador */}
-            <section id="gerador" className="grid lg:grid-cols-5 gap-6">
-              <Card
-                title="Gerador inteligente"
-                subtitle={`${!session ? '⚠️ Registe-se para começar a gerar!' : (!canGenerateTodayCheck ? '⚠️ Limite diário atingido. Volte amanhã ou adquira Premium.' : 'Escolha um método e gere combinações para estudo. Nenhuma garante vitória.')}`}
-                icon={<span>🎲</span>}
-                className="lg:col-span-3"
-              >
-                <div className="space-y-5">
-                  <div>
-                    <label className="block text-sm font-bold mb-2">Método de geração</label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {availableStrategies.map((key) => {
-                        const config: Record<string, { label: string; hint: string }> = {
-                          equilibrado: { label: 'Equilibrado (recomendado)', hint: 'Um número por cada faixa de 18 (1-18, 19-36…).' },
-                          aleatorio: { label: 'Aleatório puro', hint: 'Cada combinação tem exatamente a mesma probabilidade.' },
-                          frequencia: { label: 'Frequência histórica', hint: 'Pondera pelos números mais frequentes recentes. 🔒 Premium' },
-                          montecarlo: { label: 'Monte Carlo', hint: 'Pesos históricos + ruído gaussiano. 🔒 Premium' },
-                        };
-                        const isLocked = !(session?.isPremium || premium.isActive) && (key === 'frequencia' || key === 'montecarlo');
-                        return (
-                          <button key={key} onClick={() => !isLocked && setStrategy(key as GenerationStrategy)}
-                            className={`text-left rounded-2xl p-4 ring-2 transition min-h-[88px] ${isLocked ? 'opacity-60 cursor-not-allowed' : ''} ${
-                              strategy === key ? 'ring-red-600 bg-red-50' : 'ring-neutral-200 bg-white hover:ring-neutral-300'
-                            }`}>
-                            <div className="font-display font-bold text-base md:text-lg">{config[key].label}</div>
-                            <div className="text-xs md:text-sm text-neutral-600 mt-1">{config[key].hint}</div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <div className="grid sm:grid-cols-2 gap-4">
+            {/* Gerador com id para navegação */}
+            <div id="gerador">
+              <section className="grid lg:grid-cols-5 gap-6">
+                <Card
+                  title="Gerador inteligente"
+                  subtitle={`${!session ? '⚠️ Registe-se para começar a gerar!' : (!canGenerateTodayCheck ? '⚠️ Limite diário atingido. Volte amanhã ou adquira Premium.' : 'Escolha um método e gere combinações para estudo. Nenhuma garante vitória.')}`}
+                  icon={<span>🎲</span>}
+                  className="lg:col-span-3"
+                >
+                  <div className="space-y-5">
                     <div>
-                      <label className="block text-sm font-bold mb-2">Linhas: <strong>{lines}</strong></label>
-                      <input type="range" min={1}
-                        max={(session?.isPremium || premium.isActive) ? 10 : 1}
-                        value={lines}
-                        onChange={e => setLines(Number(e.target.value))}
-                        className="w-full accent-red-600" />
-                      <div className="text-xs text-neutral-500 mt-1">
-                        1 a {(session?.isPremium || premium.isActive) ? 10 : 1} combinações por geração
-                        {!(session?.isPremium || premium.isActive) && <span className="ml-2 text-amber-600">🔒 Premium permite até 10</span>}
+                      <label className="block text-sm font-bold mb-2">Método de geração</label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {availableStrategies.map((key) => {
+                          const config: Record<string, { label: string; hint: string }> = {
+                            equilibrado: { label: 'Equilibrado (recomendado)', hint: 'Um número por cada faixa de 18 (1-18, 19-36…).' },
+                            aleatorio: { label: 'Aleatório puro', hint: 'Cada combinação tem exatamente a mesma probabilidade.' },
+                            frequencia: { label: 'Frequência histórica', hint: 'Pondera pelos números mais frequentes recentes. 🔒 Premium' },
+                            montecarlo: { label: 'Monte Carlo', hint: 'Pesos históricos + ruído gaussiano. 🔒 Premium' },
+                          };
+                          const isLocked = !(session?.isPremium || premium.isActive) && (key === 'frequencia' || key === 'montecarlo');
+                          return (
+                            <button key={key} onClick={() => !isLocked && setStrategy(key as GenerationStrategy)}
+                              className={`text-left rounded-2xl p-4 ring-2 transition min-h-[88px] ${isLocked ? 'opacity-60 cursor-not-allowed' : ''} ${
+                                strategy === key ? 'ring-red-600 bg-red-50' : 'ring-neutral-200 bg-white hover:ring-neutral-300'
+                              }`}>
+                              <div className="font-display font-bold text-base md:text-lg">{config[key].label}</div>
+                              <div className="text-xs md:text-sm text-neutral-600 mt-1">{config[key].hint}</div>
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
+
+                    <div className="grid sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-bold mb-2">Linhas: <strong>{lines}</strong></label>
+                        <input type="range" min={1}
+                          max={(session?.isPremium || premium.isActive) ? 10 : 1}
+                          value={lines}
+                          onChange={e => setLines(Number(e.target.value))}
+                          className="w-full accent-red-600" />
+                        <div className="text-xs text-neutral-500 mt-1">
+                          1 a {(session?.isPremium || premium.isActive) ? 10 : 1} combinações por geração
+                          {!(session?.isPremium || premium.isActive) && <span className="ml-2 text-amber-600">🔒 Premium permite até 10</span>}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-bold mb-2">Par / Ímpar</label>
+                        <select value={parity} onChange={e => setParity(e.target.value as Filter['parityBias'])}
+                          className="w-full rounded-2xl bg-white ring-1 ring-neutral-200 p-3 font-semibold min-h-[52px]">
+                          <option value="nenhum">Qualquer combinação</option>
+                          <option value="equilibrado">Equilibrado (2P/3I ou 3P/2I)</option>
+                          <option value="par">Maioria par</option>
+                          <option value="impar">Maioria ímpar</option>
+                        </select>
+                      </div>
+                    </div>
+
                     <div>
-                      <label className="block text-sm font-bold mb-2">Par / Ímpar</label>
-                      <select value={parity} onChange={e => setParity(e.target.value as Filter['parityBias'])}
-                        className="w-full rounded-2xl bg-white ring-1 ring-neutral-200 p-3 font-semibold min-h-[52px]">
-                        <option value="nenhum">Qualquer combinação</option>
-                        <option value="equilibrado">Equilibrado (2P/3I ou 3P/2I)</option>
-                        <option value="par">Maioria par</option>
-                        <option value="impar">Maioria ímpar</option>
-                      </select>
+                      <label className="block text-sm font-bold mb-2">
+                        Excluir números — toque para marcar/desmarcar
+                        {exclude.length > 0 && <span className="ml-2 text-red-600">({exclude.length} excluídos)</span>}
+                      </label>
+                      <div className="grid grid-cols-10 gap-1">
+                        {Array.from({ length: TOTAL_NUMBERS }, (_, i) => i + 1).map(n => {
+                          const off = exclude.includes(n);
+                          return (
+                            <button key={n} onClick={() => toggleExclude(n)} aria-pressed={off}
+                              className={`aspect-square rounded-lg font-bold text-[10px] md:text-xs transition ${
+                                off ? 'bg-neutral-900 text-white line-through' : 'bg-white ring-1 ring-neutral-200 hover:ring-neutral-400'
+                              }`}>
+                              {String(n).padStart(2, '0')}
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
-                  </div>
 
-                  <div>
-                    <label className="block text-sm font-bold mb-2">
-                      Excluir números — toque para marcar/desmarcar
-                      {exclude.length > 0 && <span className="ml-2 text-red-600">({exclude.length} excluídos)</span>}
-                    </label>
-                    <div className="grid grid-cols-10 gap-1">
-                      {Array.from({ length: TOTAL_NUMBERS }, (_, i) => i + 1).map(n => {
-                        const off = exclude.includes(n);
-                        return (
-                          <button key={n} onClick={() => toggleExclude(n)} aria-pressed={off}
-                            className={`aspect-square rounded-lg font-bold text-[10px] md:text-xs transition ${
-                              off ? 'bg-neutral-900 text-white line-through' : 'bg-white ring-1 ring-neutral-200 hover:ring-neutral-400'
-                            }`}>
-                            {String(n).padStart(2, '0')}
-                          </button>
-                        );
-                      })}
+                    {!premium.isActive && !premium.isTrial && !session?.isPremium && (
+                      <PremiumBanner onLogin={() => setShowLogin(true)} />
+                    )}
+                    {premium.isTrial && premium.diasRestantes !== null && (
+                      <PremiumBanner isTrial={true} diasRestantes={premium.diasRestantes} onLogin={() => setShowLogin(true)} />
+                    )}
+
+                    {(!session || !canGenerateTodayCheck) && (
+                      <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-center">
+                        <span className="text-amber-800">
+                          {!session ? '⚠️ Registe-se com email para começar a gerar!' : '⚠️ Limite diário atingido! Apenas 1 geração por dia para utilizadores gratuitos.'}
+                        </span>
+                      </div>
+                    )}
+
+                    <div className="flex flex-col sm:flex-row gap-3 pt-1">
+                      <button onClick={onGenerate} disabled={!session || !canGenerateTodayCheck}
+                        className={`flex-1 min-h-[60px] px-6 py-4 rounded-2xl font-display font-black text-lg shadow-md transition ${
+                          !session || !canGenerateTodayCheck
+                            ? 'bg-neutral-400 cursor-not-allowed'
+                            : 'bg-red-600 hover:bg-red-700 text-white'
+                        }`}>
+                        🎯 Gerar {(session?.isPremium || premium.isActive) ? lines : 1} combinação{lines > 1 ? 'ões' : ''}
+                      </button>
+                      <button onClick={() => setShowHelp(true)}
+                        className="min-h-[60px] px-5 py-4 rounded-2xl bg-neutral-900 hover:bg-black text-white font-bold text-lg transition">
+                        Como funciona?
+                      </button>
                     </div>
-                  </div>
 
-                  {!premium.isActive && !premium.isTrial && !session?.isPremium && (
-                    <PremiumBanner onLogin={() => setShowLogin(true)} />
-                  )}
-                  {premium.isTrial && premium.diasRestantes !== null && (
-                    <PremiumBanner isTrial={true} diasRestantes={premium.diasRestantes} onLogin={() => setShowLogin(true)} />
-                  )}
-
-                  {(!session || !canGenerateTodayCheck) && (
-                    <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-center">
-                      <span className="text-amber-800">
-                        {!session ? '⚠️ Registe-se com email para começar a gerar!' : '⚠️ Limite diário atingido! Apenas 1 geração por dia para utilizadores gratuitos.'}
-                      </span>
-                    </div>
-                  )}
-
-                  <div className="flex flex-col sm:flex-row gap-3 pt-1">
-                    <button onClick={onGenerate} disabled={!session || !canGenerateTodayCheck}
-                      className={`flex-1 min-h-[60px] px-6 py-4 rounded-2xl font-display font-black text-lg shadow-md transition ${
-                        !session || !canGenerateTodayCheck
-                          ? 'bg-neutral-400 cursor-not-allowed'
-                          : 'bg-red-600 hover:bg-red-700 text-white'
-                      }`}>
-                      🎯 Gerar {(session?.isPremium || premium.isActive) ? lines : 1} combinação{lines > 1 ? 'ões' : ''}
-                    </button>
-                    <button onClick={() => setShowHelp(true)}
-                      className="min-h-[60px] px-5 py-4 rounded-2xl bg-neutral-900 hover:bg-black text-white font-bold text-lg transition">
-                      Como funciona?
-                    </button>
-                  </div>
-
-                  {session && !premium.isActive && !session.isPremium && (
-                    <div className="text-xs text-center text-neutral-500">
-                      {canGenerateTodayCheck
-                        ? `✅ Geração disponível hoje (1/1). Amanhã poderá gerar novamente. Trial restante: ${daysLeft} dias.`
-                        : `⏳ Próxima geração disponível amanhã. Adquira Premium para gerações ilimitadas.`}
-                    </div>
-                  )}
-                </div>
-              </Card>
-
-              <Card title="Combinações geradas"
-                subtitle={generated.length ? 'Toque no ♡ para guardar nos favoritos.' : 'As suas combinações aparecerão aqui.'}
-                icon={<span>✨</span>} className="lg:col-span-2">
-                {generated.length === 0 ? (
-                  <div className="py-10 text-center text-neutral-500">
-                    <div className="text-5xl mb-3">🎟️</div>
-                    <p className="font-semibold">Sem combinações ainda.</p>
-                    <p className="text-sm mt-1">Configure as opções e toque em "Gerar".</p>
-                    {!(session?.isPremium || premium.isActive) && (
-                      <p className="text-xs text-amber-600 mt-3">🔒 Utilizadores gratuitos: máximo 1 linha por geração</p>
+                    {session && !premium.isActive && !session.isPremium && (
+                      <div className="text-xs text-center text-neutral-500">
+                        {canGenerateTodayCheck
+                          ? `✅ Geração disponível hoje (1/1). Amanhã poderá gerar novamente. Trial restante: ${daysLeft} dias.`
+                          : `⏳ Próxima geração disponível amanhã. Adquira Premium para gerações ilimitadas.`}
+                      </div>
                     )}
                   </div>
-                ) : (
-                  <ul className="space-y-3">
-                    {generated.map((g, idx) => {
-                      const saved = favorites.some(f => f.numbers.join('-') === g.numbers.join('-'));
-                      return (
-                        <li key={g.id} className="rounded-2xl ring-1 ring-neutral-200 p-3 bg-white fade-in">
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="text-sm font-bold text-neutral-700">Linha {idx + 1}</span>
-                            <button onClick={() => toggleFavorite(g)} aria-label="Guardar nos favoritos"
-                              className={`w-11 h-11 rounded-full text-2xl transition ${saved ? 'bg-red-600 text-white' : 'bg-neutral-100 hover:bg-neutral-200'}`}>
-                              {saved ? '♥' : '♡'}
-                            </button>
-                          </div>
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            {g.numbers.map(n => <Ball key={n} n={n} size="sm" />)}
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </Card>
-            </section>
+                </Card>
 
-            {/* Diário de Apostas */}
-            {session?.isPremium || premium.isActive ? (
-              <DiarioApostas session={session!} onSessionUpdate={handleSessionUpdate} />
-            ) : (
-              <Card title="📓 Diário de Apostas" icon={<span>📓</span>}>
-                <div className="text-center py-6 text-neutral-500">
-                  🔒 Disponível apenas para utilizadores Premium.
-                  <button onClick={() => setShowUpgrade(true)} className="block mx-auto mt-3 px-4 py-2 bg-amber-500 text-black rounded-xl font-bold text-sm">
-                    Upgrade Premium
-                  </button>
-                </div>
-              </Card>
-            )}
+                <Card title="Combinações geradas"
+                  subtitle={generated.length ? 'Toque no ♡ para guardar nos favoritos.' : 'As suas combinações aparecerão aqui.'}
+                  icon={<span>✨</span>} className="lg:col-span-2">
+                  {generated.length === 0 ? (
+                    <div className="py-10 text-center text-neutral-500">
+                      <div className="text-5xl mb-3">🎟️</div>
+                      <p className="font-semibold">Sem combinações ainda.</p>
+                      <p className="text-sm mt-1">Configure as opções e toque em "Gerar".</p>
+                      {!(session?.isPremium || premium.isActive) && (
+                        <p className="text-xs text-amber-600 mt-3">🔒 Utilizadores gratuitos: máximo 1 linha por geração</p>
+                      )}
+                    </div>
+                  ) : (
+                    <ul className="space-y-3">
+                      {generated.map((g, idx) => {
+                        const saved = favorites.some(f => f.numbers.join('-') === g.numbers.join('-'));
+                        return (
+                          <li key={g.id} className="rounded-2xl ring-1 ring-neutral-200 p-3 bg-white fade-in">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-sm font-bold text-neutral-700">Linha {idx + 1}</span>
+                              <button onClick={() => toggleFavorite(g)} aria-label="Guardar nos favoritos"
+                                className={`w-11 h-11 rounded-full text-2xl transition ${saved ? 'bg-red-600 text-white' : 'bg-neutral-100 hover:bg-neutral-200'}`}>
+                                {saved ? '♥' : '♡'}
+                              </button>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {g.numbers.map(n => <Ball key={n} n={n} size="sm" />)}
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </Card>
+              </section>
+            </div>
 
-            {/* Plano Semanal */}
-            {session?.isPremium || premium.isActive ? (
-              <PlanoSemanal 
-                session={session!}
-                weights={weights}
-                hotCold={hotCold}
-                gaps={gaps}
-                draws={draws}
-                onSessionUpdate={handleSessionUpdate}
-              />
-            ) : (
-              <Card title="📅 Plano Semanal" icon={<span>📅</span>}>
-                <div className="text-center py-6 text-neutral-500">
-                  🔒 Disponível apenas para utilizadores Premium.
-                  <button onClick={() => setShowUpgrade(true)} className="block mx-auto mt-3 px-4 py-2 bg-amber-500 text-black rounded-xl font-bold text-sm">
-                    Upgrade Premium
-                  </button>
-                </div>
-              </Card>
-            )}
+            {/* Diário de Apostas com id */}
+            <div id="diario">
+              {session?.isPremium || premium.isActive ? (
+                <DiarioApostas session={session!} onSessionUpdate={handleSessionUpdate} />
+              ) : (
+                <Card title="📓 Diário de Apostas" icon={<span>📓</span>}>
+                  <div className="text-center py-6 text-neutral-500">
+                    🔒 Disponível apenas para utilizadores Premium.
+                    <button onClick={() => setShowUpgrade(true)} className="block mx-auto mt-3 px-4 py-2 bg-amber-500 text-black rounded-xl font-bold text-sm">
+                      Upgrade Premium
+                    </button>
+                  </div>
+                </Card>
+              )}
+            </div>
+
+            {/* Plano Semanal com id */}
+            <div id="plano_semanal">
+              {session?.isPremium || premium.isActive ? (
+                <PlanoSemanal 
+                  session={session!}
+                  weights={weights}
+                  hotCold={hotCold}
+                  gaps={gaps}
+                  draws={draws}
+                  onSessionUpdate={handleSessionUpdate}
+                />
+              ) : (
+                <Card title="📅 Plano Semanal" icon={<span>📅</span>}>
+                  <div className="text-center py-6 text-neutral-500">
+                    🔒 Disponível apenas para utilizadores Premium.
+                    <button onClick={() => setShowUpgrade(true)} className="block mx-auto mt-3 px-4 py-2 bg-amber-500 text-black rounded-xl font-bold text-sm">
+                      Upgrade Premium
+                    </button>
+                  </div>
+                </Card>
+              )}
+            </div>
+
+            {/* Relatório Mensal com id */}
+            <div id="relatorio">
+              {session?.isPremium || premium.isActive ? (
+                <RelatorioMensal session={session!} />
+              ) : (
+                <Card title="📊 Relatório Mensal" icon={<span>📊</span>}>
+                  <div className="text-center py-6 text-neutral-500">
+                    🔒 Disponível apenas para utilizadores Premium.
+                    <button onClick={() => setShowUpgrade(true)} className="block mx-auto mt-3 px-4 py-2 bg-amber-500 text-black rounded-xl font-bold text-sm">
+                      Upgrade Premium
+                    </button>
+                  </div>
+                </Card>
+              )}
+            </div>
 
             {/* Simulador de Orçamento */}
             <Card title="💰 Simulador de apostas" icon={<span>🎯</span>}>
@@ -1300,20 +1398,6 @@ export default function App() {
               </div>
             </Card>
 
-            {/* Relatório Mensal */}
-            {session?.isPremium || premium.isActive ? (
-              <RelatorioMensal session={session!} />
-            ) : (
-              <Card title="📊 Relatório Mensal" icon={<span>📊</span>}>
-                <div className="text-center py-6 text-neutral-500">
-                  🔒 Disponível apenas para utilizadores Premium.
-                  <button onClick={() => setShowUpgrade(true)} className="block mx-auto mt-3 px-4 py-2 bg-amber-500 text-black rounded-xl font-bold text-sm">
-                    Upgrade Premium
-                  </button>
-                </div>
-              </Card>
-            )}
-
             {/* Favoritos */}
             <Card title="Os seus favoritos" subtitle="Guardados neste dispositivo (localStorage)." icon={<span>💾</span>}>
               {favorites.length === 0 ? (
@@ -1335,85 +1419,87 @@ export default function App() {
               )}
             </Card>
 
-            {/* Estatísticas */}
-            <section id="estatisticas" className="grid lg:grid-cols-2 gap-6">
-              <Card title="Frequência dos números"
-                subtitle={`Últimos ${Math.min(windowSize, draws.length)} sorteios — ocorrências de cada número.`}
-                icon={<span>📊</span>}>
-                <div className="flex items-center gap-3 mb-4">
-                  <label className="text-sm font-bold shrink-0">Janela:</label>
-                  <select value={windowSize} onChange={e => setWindowSize(Number(e.target.value))}
-                    className="rounded-xl bg-white ring-1 ring-neutral-200 px-3 py-2 font-semibold text-sm">
-                    <option value={20}>20 sorteios</option>
-                    <option value={60}>60 sorteios</option>
-                    <option value={120}>120 sorteios</option>
-                    <option value={draws.length}>Todos ({draws.length})</option>
-                  </select>
-                </div>
-                <div className="space-y-0.5 max-h-[420px] overflow-y-auto pr-1">
-                  {freq.freq.slice(1).map((c, i) => {
-                    const n = i + 1;
-                    const denom = Math.min(windowSize, draws.length) || 1;
-                    return (
-                      <div key={n} className="flex items-center gap-2 text-sm">
-                        <div className="w-8 text-right font-mono font-bold text-xs">{String(n).padStart(2, '0')}</div>
-                        <div className="flex-1 h-5 rounded-md bg-neutral-100 overflow-hidden">
-                          <div className="bar-grow h-full bg-gradient-to-r from-red-600 to-amber-400"
-                            style={{ width: `${(c / maxFreq) * 100}%` }} />
-                        </div>
-                        <div className="w-14 text-right text-neutral-500 text-xs">
-                          {c}x · {((c / denom) * 100).toFixed(0)}%
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </Card>
-
-              <div className="space-y-6">
-                <Card title="🔥 Quentes & ❄️ Frios"
-                  subtitle="Os 8 mais e menos frequentes na janela seleccionada." icon={<span>📈</span>}>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <div className="font-bold mb-2 text-red-600 text-sm">🔥 Mais frequentes</div>
-                      <div className="flex flex-wrap gap-1.5">
-                        {hotCold.hot.map(n => <Ball key={n} n={n} variant="hot" size="sm" />)}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="font-bold mb-2 text-sky-700 text-sm">❄️ Menos frequentes</div>
-                      <div className="flex flex-wrap gap-1.5">
-                        {hotCold.cold.map(n => <Ball key={n} n={n} variant="cold" size="sm" />)}
-                      </div>
-                    </div>
+            {/* Estatísticas com id */}
+            <div id="estatisticas">
+              <section className="grid lg:grid-cols-2 gap-6">
+                <Card title="Frequência dos números"
+                  subtitle={`Últimos ${Math.min(windowSize, draws.length)} sorteios — ocorrências de cada número.`}
+                  icon={<span>📊</span>}>
+                  <div className="flex items-center gap-3 mb-4">
+                    <label className="text-sm font-bold shrink-0">Janela:</label>
+                    <select value={windowSize} onChange={e => setWindowSize(Number(e.target.value))}
+                      className="rounded-xl bg-white ring-1 ring-neutral-200 px-3 py-2 font-semibold text-sm">
+                      <option value={20}>20 sorteios</option>
+                      <option value={60}>60 sorteios</option>
+                      <option value={120}>120 sorteios</option>
+                      <option value={draws.length}>Todos ({draws.length})</option>
+                    </select>
                   </div>
-                  <p className="text-xs text-neutral-500 mt-3">
-                    A frequência passada <strong>não prevê resultados futuros</strong>. Cada sorteio é independente.
-                  </p>
+                  <div className="space-y-0.5 max-h-[420px] overflow-y-auto pr-1">
+                    {freq.freq.slice(1).map((c, i) => {
+                      const n = i + 1;
+                      const denom = Math.min(windowSize, draws.length) || 1;
+                      return (
+                        <div key={n} className="flex items-center gap-2 text-sm">
+                          <div className="w-8 text-right font-mono font-bold text-xs">{String(n).padStart(2, '0')}</div>
+                          <div className="flex-1 h-5 rounded-md bg-neutral-100 overflow-hidden">
+                            <div className="bar-grow h-full bg-gradient-to-r from-red-600 to-amber-400"
+                              style={{ width: `${(c / maxFreq) * 100}%` }} />
+                          </div>
+                          <div className="w-14 text-right text-neutral-500 text-xs">
+                            {c}x · {((c / denom) * 100).toFixed(0)}%
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </Card>
 
-                <Card title="Atraso (gap analysis)"
-                  subtitle="Há quantos sorteios cada número não sai." icon={<span>⏳</span>}>
-                  <div className="grid grid-cols-10 gap-1">
-                    {gaps.map(({ n, gap }) => (
-                      <div key={n} title={`Nº ${n} — ${gap} sorteios sem sair`}
-                        className={`aspect-square rounded-md text-[9px] font-bold flex items-center justify-center ring-1 ${
-                          gap >= 30 ? 'bg-red-600 text-white ring-red-600'
-                          : gap >= 15 ? 'bg-amber-100 ring-amber-300'
-                          : 'bg-neutral-100 ring-neutral-200'
-                        }`}>
-                        {String(n).padStart(2, '0')}
+                <div className="space-y-6">
+                  <Card title="🔥 Quentes & ❄️ Frios"
+                    subtitle="Os 8 mais e menos frequentes na janela seleccionada." icon={<span>📈</span>}>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <div className="font-bold mb-2 text-red-600 text-sm">🔥 Mais frequentes</div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {hotCold.hot.map(n => <Ball key={n} n={n} variant="hot" size="sm" />)}
+                        </div>
                       </div>
-                    ))}
-                  </div>
-                  <div className="flex gap-4 mt-2 text-xs text-neutral-600">
-                    <span><span className="inline-block w-3 h-3 rounded bg-red-600 align-middle mr-1"/>≥ 30 sorteios</span>
-                    <span><span className="inline-block w-3 h-3 rounded bg-amber-200 align-middle mr-1"/>15–29</span>
-                    <span><span className="inline-block w-3 h-3 rounded bg-neutral-200 align-middle mr-1"/>0–14</span>
-                  </div>
-                </Card>
-              </div>
-            </section>
+                      <div>
+                        <div className="font-bold mb-2 text-sky-700 text-sm">❄️ Menos frequentes</div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {hotCold.cold.map(n => <Ball key={n} n={n} variant="cold" size="sm" />)}
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-xs text-neutral-500 mt-3">
+                      A frequência passada <strong>não prevê resultados futuros</strong>. Cada sorteio é independente.
+                    </p>
+                  </Card>
+
+                  <Card title="Atraso (gap analysis)"
+                    subtitle="Há quantos sorteios cada número não sai." icon={<span>⏳</span>}>
+                    <div className="grid grid-cols-10 gap-1">
+                      {gaps.map(({ n, gap }) => (
+                        <div key={n} title={`Nº ${n} — ${gap} sorteios sem sair`}
+                          className={`aspect-square rounded-md text-[9px] font-bold flex items-center justify-center ring-1 ${
+                            gap >= 30 ? 'bg-red-600 text-white ring-red-600'
+                            : gap >= 15 ? 'bg-amber-100 ring-amber-300'
+                            : 'bg-neutral-100 ring-neutral-200'
+                          }`}>
+                          {String(n).padStart(2, '0')}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex gap-4 mt-2 text-xs text-neutral-600">
+                      <span><span className="inline-block w-3 h-3 rounded bg-red-600 align-middle mr-1"/>≥ 30 sorteios</span>
+                      <span><span className="inline-block w-3 h-3 rounded bg-amber-200 align-middle mr-1"/>15–29</span>
+                      <span><span className="inline-block w-3 h-3 rounded bg-neutral-200 align-middle mr-1"/>0–14</span>
+                    </div>
+                  </Card>
+                </div>
+              </section>
+            </div>
 
             {/* Distribuição por dezena */}
             <Card title="Distribuição por dezena"
@@ -1487,8 +1573,8 @@ export default function App() {
               </Card>
             </section>
 
-            {/* Histórico */}
-            <section id="historico">
+            {/* Histórico com id */}
+            <div id="historico">
               <Card title="Histórico interactivo"
                 subtitle="Clique num sorteio para o seleccionar. Dados mais recentes primeiro."
                 icon={<span>📜</span>}>
@@ -1557,7 +1643,7 @@ export default function App() {
                   </div>
                 )}
               </Card>
-            </section>
+            </div>
           </>
         )}
 
@@ -1610,51 +1696,53 @@ export default function App() {
 
         {/* ═══════════ TAB: PRÉMIOS ════════════════════════════════ */}
         {tab === 'premios' && (
-          <section id="premios" className="space-y-6">
-            <Card title="Simulador de prémios" subtitle="Calcule o prémio líquido com base no Decreto Executivo n.º 695/25." icon={<span>💰</span>}>
-              <PrizeCalculator />
-            </Card>
+          <div id="premios">
+            <section className="space-y-6">
+              <Card title="Simulador de prémios" subtitle="Calcule o prémio líquido com base no Decreto Executivo n.º 695/25." icon={<span>💰</span>}>
+                <PrizeCalculator />
+              </Card>
 
-            <Card title="Tabela de multiplicadores" subtitle="Cotas fixas por opção de aposta (Art.º 16 do Decreto 695/25)." icon={<span>📋</span>}>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-neutral-100">
-                    <tr>
-                      <th className="px-4 py-3 text-left font-bold">Opção</th>
-                      <th className="px-4 py-3 text-left font-bold">Acerta</th>
-                      <th className="px-4 py-3 text-right font-bold">Multiplicador</th>
-                      <th className="px-4 py-3 text-right font-bold">Prémio por {fmtKz(100)}</th>
-                      <th className="px-4 py-3 text-right font-bold">Prémio por {fmtKz(1000)}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {([
-                      [2, 'os 2 números escolhidos', 4],
-                      [3, 'os 3 números escolhidos', 25],
-                      [4, 'os 4 números escolhidos', 120],
-                      [5, 'os 5 números escolhidos', 2500],
-                    ] as [number, string, number][]).map(([opt, desc, mult]) => (
-                      <tr key={opt} className="border-b border-neutral-100 hover:bg-neutral-50">
-                        <td className="px-4 py-3 font-display font-black text-lg">{opt} números</td>
-                        <td className="px-4 py-3 text-neutral-600">{desc}</td>
-                        <td className="px-4 py-3 text-right font-mono font-bold text-blue-600">×{mult}</td>
-                        <td className="px-4 py-3 text-right font-mono">{fmtKz(100 * mult)}</td>
-                        <td className="px-4 py-3 text-right font-mono font-bold">{fmtKz(1000 * mult)}</td>
+              <Card title="Tabela de multiplicadores" subtitle="Cotas fixas por opção de aposta (Art.º 16 do Decreto 695/25)." icon={<span>📋</span>}>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-neutral-100">
+                      <tr>
+                        <th className="px-4 py-3 text-left font-bold">Opção</th>
+                        <th className="px-4 py-3 text-left font-bold">Acerta</th>
+                        <th className="px-4 py-3 text-right font-bold">Multiplicador</th>
+                        <th className="px-4 py-3 text-right font-bold">Prémio por {fmtKz(100)}</th>
+                        <th className="px-4 py-3 text-right font-bold">Prémio por {fmtKz(1000)}</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="mt-4 p-4 rounded-2xl bg-amber-50 ring-1 ring-amber-200 text-sm text-amber-900">
-                <strong>Regime fiscal</strong> ({DECREE_REF}, Art.º 26): prémios ≤ {fmtKz(280_000)} isentos de
-                imposto · excedente sujeito a 15% de Imposto Especial de Jogos.
-                Aposta: mínimo {fmtKz(MIN_STAKE_KZ)} · máximo {fmtKz(MAX_STAKE_KZ)}.
-              </div>
-            </Card>
-          </section>
+                    </thead>
+                    <tbody>
+                      {([
+                        [2, 'os 2 números escolhidos', 4],
+                        [3, 'os 3 números escolhidos', 25],
+                        [4, 'os 4 números escolhidos', 120],
+                        [5, 'os 5 números escolhidos', 2500],
+                      ] as [number, string, number][]).map(([opt, desc, mult]) => (
+                        <tr key={opt} className="border-b border-neutral-100 hover:bg-neutral-50">
+                          <td className="px-4 py-3 font-display font-black text-lg">{opt} números</td>
+                          <td className="px-4 py-3 text-neutral-600">{desc}</td>
+                          <td className="px-4 py-3 text-right font-mono font-bold text-blue-600">×{mult}</td>
+                          <td className="px-4 py-3 text-right font-mono">{fmtKz(100 * mult)}</td>
+                          <td className="px-4 py-3 text-right font-mono font-bold">{fmtKz(1000 * mult)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="mt-4 p-4 rounded-2xl bg-amber-50 ring-1 ring-amber-200 text-sm text-amber-900">
+                  <strong>Regime fiscal</strong> ({DECREE_REF}, Art.º 26): prémios ≤ {fmtKz(280_000)} isentos de
+                  imposto · excedente sujeito a 15% de Imposto Especial de Jogos.
+                  Aposta: mínimo {fmtKz(MIN_STAKE_KZ)} · máximo {fmtKz(MAX_STAKE_KZ)}.
+                </div>
+              </Card>
+            </section>
+          </div>
         )}
 
-        {/* ── Aprender / Educativo ─────────────────────────────── */}
+        {/* ── Aprender / Educativo ── */}
         <section id="aprender" className="grid md:grid-cols-2 gap-6">
           <Card title={`Como funciona o ${APP_NAME}`} subtitle="Regras reais, de forma simples." icon={<span>📖</span>}>
             <ol className="list-decimal pl-5 space-y-2 text-neutral-800 text-sm">
@@ -1689,7 +1777,7 @@ export default function App() {
           </Card>
         </section>
 
-        {/* ── Jogo responsável ────────────────────────────────────── */}
+        {/* ── Jogo responsável ── */}
         <Card title="Jogo responsável" subtitle="Ferramentas de apoio para uma experiência saudável."
           icon={<span>🛡️</span>} className="bg-emerald-50 ring-1 ring-emerald-200">
 
@@ -1723,7 +1811,7 @@ export default function App() {
         </Card>
       </main>
 
-      {/* ── Footer ──────────────────────────────────────────────── */}
+      {/* ── Footer ── */}
       <footer className="mt-12 bg-neutral-900 text-neutral-200">
         <div className="max-w-6xl mx-auto px-4 py-10 grid md:grid-cols-4 gap-6">
           <div>
@@ -1780,7 +1868,7 @@ export default function App() {
         </div>
       </footer>
 
-      {/* ── Modais ──────────────────────────────────────────────── */}
+      {/* ── Modais ── */}
       <Modal open={showTerms} onClose={() => setShowTerms(false)} title="Termos de uso">
         <ul className="list-disc pl-5 space-y-2 text-sm">
           <li>Idade mínima de 18 anos e residência em jurisdição onde o acesso é permitido por lei.</li>
@@ -1993,6 +2081,15 @@ export default function App() {
       {/* Modais Premium */}
       {showLogin && <LoginModal onClose={() => setShowLogin(false)} />}
       <TrialExpiredModal />
+
+      {/* ── CHATBOT ── */}
+      <ChatBot 
+        session={session}
+        onUpgrade={() => setShowUpgrade(true)}
+        onLogin={() => setShowGate(true)}
+        onScrollTo={handleChatScrollTo}
+        onOpenModal={handleChatOpenModal}
+      />
 
       {/* TOAST NOTIFICATIONS */}
       {toast && (
