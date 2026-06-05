@@ -241,7 +241,7 @@ export default function App() {
   // ── Verificar se pode gerar hoje (usando sessão profissional) ───────
   const canGenerateTodayCheck = useMemo(() => {
     if (!session) return false;
-    if (session.isPremium || premium.isActive) return true;
+    if (session.isPremium) return true;
     return canGenerate(session).ok;
   }, [session, premium.isActive]);
 

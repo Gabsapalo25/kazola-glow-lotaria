@@ -12,6 +12,7 @@ interface Message {
   id: number;
   from: 'bot' | 'user';
   text: string;
+  html?: string;
   btns?: { label: string; action: string }[];
 }
 
@@ -29,7 +30,7 @@ interface Props {
 function getAnswer(
   input: string,
   session: UserSession | null
-): { answer: string; btns: { label: string; action: string }[] } {
+): { answer: string; html?: string; btns: { label: string; action: string }[] } {
   const raw = input.toLowerCase().trim();
   const lower = raw.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   const isPremium = session?.isPremium || false;
@@ -52,7 +53,7 @@ function getAnswer(
   // ═══════════════════════════════════════════════════════
   // 1 · MENU / BOAS-VINDAS
   // ═══════════════════════════════════════════════════════
-  if (lower === 'menu' || lower === '' || lower.includes('ola') || lower.includes('oi') || lower.includes('bom dia') || lower.includes('boa tarde') || lower.includes('boa noite')) {
+  if (lower === 'menu' || lower === '' || lower.includes('olá') || lower.includes('oi') || lower.includes('bom dia') || lower.includes('boa tarde') || lower.includes('boa noite')) {
     if (isPremium) {
       return {
         answer: `Olá ${nome}! 🏆 Tudo pronto para ti.\n\nO que precisas hoje?`,
@@ -149,7 +150,7 @@ function getAnswer(
   // ═══════════════════════════════════════════════════════
   if (lower.includes('premio') || lower.includes('ganhar') || lower.includes('simulador') || lower.includes('multiplicador') || lower.includes('imposto') || lower.includes('quanto') ) {
     return {
-      answer: `💰 **Prémios e Simulador**\n\n**Multiplicadores oficiais (Decreto 695/25):**\n• Apostar em 2 e acertar os 2 → ×4\n• Apostar em 3 e acertar os 3 → ×25\n• Apostar em 4 e acertar os 4 → ×120\n• Apostar em 5 e acertar os 5 → ×2.500\n\n**Exemplo prático:**\nApostas 500 Kz em 3 números e acertas os 3 → recebes 12.500 Kz.\n\n**Imposto (Art. 26 do Decreto 695/25):**\n• Prémios até 280.000 Kz → isentos de imposto\n• Acima de 280.000 Kz → pagas 15% sobre o excedente\n\n**Prémio máximo possível:**\n1.000 Kz × 2.500 = 2.500.000 Kz\n\nUsa o Simulador de Prémios na tab "💰 PRÉMIOS" para calcular o teu prémio líquido exacto com qualquer valor de aposta.`,
+      answer: `💰 **Prémios e Simulador**\n\n**Multiplicadores oficiais (Decreto 695/25):**\n• Apostar em 2 e acertar os 2 → ×4\n• Apostar en 3 e acertar os 3 → ×25\n• Apostar em 4 e acertar os 4 → ×120\n• Apostar em 5 e acertar os 5 → ×2.500\n\n**Exemplo prático:**\nApostas 500 Kz em 3 números e acertas os 3 → recebes 12.500 Kz.\n\n**Imposto (Art. 26 do Decreto 695/25):**\n• Prémios até 280.000 Kz → isentos de imposto\n• Acima de 280.000 Kz → pagas 15% sobre o excedente\n\n**Prémio máximo possível:**\n1.000 Kz × 2.500 = 2.500.000 Kz\n\nUsa o Simulador de Prémios na tab "💰 PRÉMIOS" para calcular o teu prémio líquido exacto com qualquer valor de aposta.`,
       btns: [
         { label: '💰 Abrir Simulador', action: 'nav_premios' },
         { label: '🎲 Gerar combinações', action: 'nav_gerador' },
@@ -174,7 +175,7 @@ function getAnswer(
   // ═══════════════════════════════════════════════════════
   // 8 · JOGO RESPONSÁVEL
   // ═══════════════════════════════════════════════════════
-  if (lower.includes('responsavel') || lower.includes('autoavaliacao') || lower.includes('vicio') || lower.includes('dependencia') || lower.includes('parar') || lower.includes('isj') || lower.includes('ajuda') && lower.includes('jogo')) {
+  if (lower.includes('responsavel') || lower.includes('autoavaliacao') || lower.includes('vicio') || lower.includes('dependencia') || lower.includes('parar') || lower.includes('isj') || (lower.includes('ajuda') && lower.includes('jogo'))) {
     return {
       answer: `🛡️ **Jogo Responsável**\n\nO KazolaGlow tem ferramentas gratuitas para te ajudar a jogar com saúde:\n\n📋 **Autoavaliação** — 5 perguntas que avaliam os teus hábitos. Recebes feedback personalizado e honesto.\n\n⏱️ **Temporizador de sessão** — define 15, 30, 45 ou 60 minutos. O sistema avisa quando o tempo acabar.\n\n🚪 **Período de reflexão** — afasta-te voluntariamente por 24h, 7 dias ou 30 dias. Sem pressão.\n\n**Lembra-te sempre:**\n• O jogo é entretenimento, não fonte de rendimento\n• Define um orçamento e cumpre-o\n• Nunca jogues para recuperar perdas\n• Se sentires que perdeste o controlo, pede ajuda\n\n📞 **Apoio profissional:** Contacta o ISJ — Instituto de Supervisão de Jogos de Angola.`,
       btns: [
@@ -254,7 +255,7 @@ function getAnswer(
   // ═══════════════════════════════════════════════════════
   // 14 · PREMIUM — APRESENTAÇÃO COMPLETA
   // ═══════════════════════════════════════════════════════
-  if (lower.includes('premium') || lower.includes('upgrade') || lower.includes('beneficio') || lower.includes('plano') && lower.includes('pago')) {
+  if (lower.includes('premium') || lower.includes('upgrade') || lower.includes('beneficio') || (lower.includes('plano') && lower.includes('pago'))) {
     const urg = urgencia();
     return {
       answer: `🏆 **Premium KazolaGlow**\n\n**O que desbloqueia:**\n✅ Gerações ilimitadas por dia\n✅ Método Frequência Histórica\n✅ Método Monte Carlo\n✅ Até 10 linhas por geração\n✅ Diário de Apostas completo\n✅ Plano Semanal profissional\n✅ Relatório Mensal detalhado\n✅ Sincronização cross-device\n\n**Planos:**\n📅 Mensal — **2.500 Kz** (~84 Kz/dia)\n📆 Anual — **20.000 Kz** (poupas 10.000 Kz)\n\n**Como activar:**\n1. Transferência BAI para:\n   👤 Gabriel António Armando Sapalo\n   🔢 IBAN: AO06 0040 0000 1859 5631 1019 4\n2. Envia comprovativo para glowscalepro@gmail.com\n3. Recebes o token em minutos\n4. Inseres o token no topo da página (🔑 Inserir token)\n\n⚡ Activação em menos de 5 minutos.${urg}\n\n⚠️ Restam apenas ${VAGAS} vagas promocionais este mês.`,
@@ -268,11 +269,45 @@ function getAnswer(
   }
 
   // ═══════════════════════════════════════════════════════
-  // 15 · PAGAMENTO — DETALHES
+  // 15 · PAGAMENTO — DETALHES COM HTML
   // ═══════════════════════════════════════════════════════
   if (lower.includes('pagar') || lower.includes('pagamento') || lower.includes('transferencia') || lower.includes('iban') || lower.includes('bai') || lower.includes('mpesa') || lower.includes('token') || lower.includes('ativar')) {
     return {
-      answer: `💳 **Como activar o Premium**\n\n**Passo 1 — Escolhe o plano:**\n• Mensal: 2.500 Kz\n• Anual: 20.000 Kz (poupas 10.000 Kz)\n\n**Passo 2 — Faz a transferência:**\n🏦 Banco BAI\n👤 Gabriel António Armando Sapalo\n🔢 IBAN: AO06 0040 0000 1859 5631 1019 4\n\n**Passo 3 — Envia o comprovativo:**\n📧 glowscalepro@gmail.com\n💬 WhatsApp: +244 923 379 486\n\n**Passo 4 — Activa:**\nRecebes um token de 16 caracteres por email. Inseres em "🔑 Inserir token" no topo da página.\n\n⚡ **Activação em menos de 5 minutos** após confirmação do pagamento.`,
+      answer: ``,
+      html: `
+<p>💳 <strong>Como activar o Premium</strong></p>
+<p><strong>Passo 1 — Escolhe o plano:</strong><br/>
+- Mensal: 2.500 Kz<br/>
+- Anual: 20.000 Kz (poupas 10.000 Kz)</p>
+
+<p><strong>Passo 2 — Escolhe como pagar:</strong></p>
+
+<p>🏦 <strong>Transferência BAI</strong><br/>
+👤 Gabriel António Armando Sapalo<br/>
+🔢 IBAN: AO06 0040 0000 1859 5631 1019 4</p>
+
+<div style="display:flex;align-items:center;gap:8px;background:rgba(255,140,0,0.12);border:1px solid rgba(255,140,0,0.4);border-radius:12px;padding:10px 14px;margin:8px 0;">
+  <img src="/mcx-express.png" alt="MCX Express" style="width:38px;height:38px;border-radius:8px;flex-shrink:0;" />
+  <div>
+    <div style="color:#FF8C00;font-weight:700;font-size:0.85rem;">Multicaixa Express <span style="background:#FF8C00;color:#fff;font-size:0.65rem;padding:1px 6px;border-radius:20px;margin-left:4px;">RECOMENDADO</span></div>
+    <div style="color:#ccc;font-size:0.78rem;">🔢 Número: 923 379 486</div>
+    <div style="color:#aaa;font-size:0.75rem;">✅ Pagamento imediato, sem esperas bancárias</div>
+  </div>
+</div>
+
+<p><strong>Passo 3 — Envia o comprovativo:</strong><br/>
+📧 glowscalepro@gmail.com <em style="color:#F5C518;">← obrigatório para activação automática</em><br/>
+💬 WhatsApp: +244 923 379 486 (opcional)</p>
+
+<div style="background:rgba(245,197,24,0.08);border-left:3px solid #F5C518;padding:8px 12px;border-radius:6px;font-size:0.78rem;color:#ccc;">
+⚠️ O envio por <strong style="color:#F5C518;">email</strong> activa o teu acesso automaticamente em menos de 5 minutos. Sem email, a activação pode demorar por requerer confirmação manual.
+</div>
+
+<p style="margin-top:10px;"><strong>Passo 4 — Activa:</strong><br/>
+Recebes um token de 16 caracteres por email. Inseres em "🔑 Inserir token" no topo da página.</p>
+
+<p>⚡ <strong>Activação automática em menos de 5 minutos</strong> — via email.</p>
+`,
       btns: [
         upgradeCTA,
         { label: '📧 Contactar suporte', action: 'suporte' },
@@ -282,7 +317,7 @@ function getAnswer(
   }
 
   // ═══════════════════════════════════════════════════════
-  // 16 · VALE A PENA? — PROVA SOCIAL SEM EXAGEROS
+  // 16 · VALE A PENA?
   // ═══════════════════════════════════════════════════════
   if (lower.includes('vale a pena') || lower.includes('compensa') || lower.includes('funciona mesmo') || lower.includes('garantia') || lower.includes('resultados')) {
     return {
@@ -366,7 +401,7 @@ function getAnswer(
   }
 
   // ═══════════════════════════════════════════════════════
-  // 21 · QUALIFICAÇÃO — DOR DO UTILIZADOR
+  // 21 · QUALIFICAÇÃO
   // ═══════════════════════════════════════════════════════
   if (lower.includes('nao sei') || lower.includes('como escolher') || lower.includes('que numeros') || lower.includes('estrategia')) {
     return {
@@ -380,7 +415,7 @@ function getAnswer(
   }
 
   // ═══════════════════════════════════════════════════════
-  // FALLBACK — nunca deixa o utilizador sem resposta
+  // FALLBACK
   // ═══════════════════════════════════════════════════════
   return {
     answer: `Não tenho a certeza se percebi bem a tua pergunta. 😊\n\nPosso ajudar-te com qualquer um destes temas:`,
@@ -401,18 +436,17 @@ function getAnswer(
 // COMPONENTE PRINCIPAL
 // ─────────────────────────────────────────────────────────────
 export default function ChatBot({ session, onUpgrade, onLogin, onOpenModal, onScrollTo }: Props) {
-  const [open, setOpen]     = useState(false);
-  const [msgs, setMsgs]     = useState<Message[]>([]);
-  const [input, setInput]   = useState('');
-  const [busy, setBusy]     = useState(false);
-  const bottomRef           = useRef<HTMLDivElement>(null);
-  const idRef               = useRef(0);
+  const [open, setOpen] = useState(false);
+  const [msgs, setMsgs] = useState<Message[]>([]);
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const idRef = useRef(0);
 
-  // boas-vindas ao abrir
   useEffect(() => {
     if (open && msgs.length === 0) {
-      const { answer, btns } = getAnswer('menu', session);
-      setMsgs([{ id: idRef.current++, from: 'bot', text: answer, btns }]);
+      const { answer, html, btns } = getAnswer('menu', session);
+      setMsgs([{ id: idRef.current++, from: 'bot', text: answer, html, btns }]);
     }
   }, [open, session, msgs.length]);
 
@@ -420,15 +454,15 @@ export default function ChatBot({ session, onUpgrade, onLogin, onOpenModal, onSc
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [msgs]);
 
-  const push = (from: 'bot' | 'user', text: string, btns?: { label: string; action: string }[]) =>
-    setMsgs(prev => [...prev, { id: idRef.current++, from, text, btns }]);
+  const push = (from: 'bot' | 'user', text: string, html?: string, btns?: { label: string; action: string }[]) =>
+    setMsgs(prev => [...prev, { id: idRef.current++, from, text, html, btns }]);
 
   const respond = (query: string) => {
     if (busy) return;
     setBusy(true);
     setTimeout(() => {
-      const { answer, btns } = getAnswer(query, session);
-      push('bot', answer, btns);
+      const { answer, html, btns } = getAnswer(query, session);
+      push('bot', answer, html, btns);
       setBusy(false);
     }, 320);
   };
@@ -445,64 +479,125 @@ export default function ChatBot({ session, onUpgrade, onLogin, onOpenModal, onSc
     if (busy) return;
     push('user', label);
 
-    // acções especiais
-    if (action === 'upgrade')   { respond('premium'); setTimeout(() => onUpgrade?.(), 800); return; }
-    if (action === 'login')     { respond('registar'); setTimeout(() => onLogin?.(), 800); return; }
-    if (action === 'menu')      { setBusy(true); setTimeout(() => { const { answer, btns } = getAnswer('menu', session); push('bot', answer, btns); setBusy(false); }, 300); return; }
+    if (action === 'upgrade') { respond('premium'); setTimeout(() => onUpgrade?.(), 800); return; }
+    if (action === 'login') { respond('registar'); setTimeout(() => onLogin?.(), 800); return; }
+    if (action === 'menu') {
+      setBusy(true);
+      setTimeout(() => {
+        const { answer, html, btns } = getAnswer('menu', session);
+        push('bot', answer, html, btns);
+        setBusy(false);
+      }, 300);
+      return;
+    }
 
-    // navegação para secções
-    if (action === 'nav_gerador')     { push('bot', '🎲 A abrir o Gerador…'); setTimeout(() => onScrollTo?.('gerador'), 600); return; }
-    if (action === 'nav_estatisticas'){ push('bot', '📊 A abrir as Estatísticas…'); setTimeout(() => onScrollTo?.('estatisticas'), 600); return; }
-    if (action === 'nav_historico')   { push('bot', '📜 A abrir o Histórico…'); setTimeout(() => onScrollTo?.('historico'), 600); return; }
-    if (action === 'nav_premios')     { push('bot', '💰 A abrir o Simulador…'); setTimeout(() => onScrollTo?.('premios'), 600); return; }
-    if (action === 'nav_diario')      { push('bot', '📓 A abrir o Diário…'); setTimeout(() => onScrollTo?.('diario'), 600); return; }
-    if (action === 'nav_plano')       { push('bot', '📅 A abrir o Plano Semanal…'); setTimeout(() => onScrollTo?.('plano_semanal'), 600); return; }
-    if (action === 'nav_relatorio')   { push('bot', '📊 A abrir o Relatório…'); setTimeout(() => onScrollTo?.('relatorio'), 600); return; }
+    if (action === 'nav_gerador') { push('bot', '🎲 A abrir o Gerador…'); setTimeout(() => onScrollTo?.('gerador'), 600); return; }
+    if (action === 'nav_estatisticas') { push('bot', '📊 A abrir as Estatísticas…'); setTimeout(() => onScrollTo?.('estatisticas'), 600); return; }
+    if (action === 'nav_historico') { push('bot', '📜 A abrir o Histórico…'); setTimeout(() => onScrollTo?.('historico'), 600); return; }
+    if (action === 'nav_premios') { push('bot', '💰 A abrir o Simulador…'); setTimeout(() => onScrollTo?.('premios'), 600); return; }
+    if (action === 'nav_diario') { push('bot', '📓 A abrir o Diário…'); setTimeout(() => onScrollTo?.('diario'), 600); return; }
+    if (action === 'nav_plano') { push('bot', '📅 A abrir o Plano Semanal…'); setTimeout(() => onScrollTo?.('plano_semanal'), 600); return; }
+    if (action === 'nav_relatorio') { push('bot', '📊 A abrir o Relatório…'); setTimeout(() => onScrollTo?.('relatorio'), 600); return; }
 
-    // modais
     if (action === 'modal_responsible') { push('bot', '🛡️ A abrir Jogo Responsável…'); setTimeout(() => onOpenModal?.('responsible'), 600); return; }
-    if (action === 'modal_terms')       { push('bot', '📄 A abrir Termos…'); setTimeout(() => onOpenModal?.('terms'), 600); return; }
-    if (action === 'modal_privacy')     { push('bot', '🔒 A abrir Privacidade…'); setTimeout(() => onOpenModal?.('privacy'), 600); return; }
+    if (action === 'modal_terms') { push('bot', '📄 A abrir Termos…'); setTimeout(() => onOpenModal?.('terms'), 600); return; }
+    if (action === 'modal_privacy') { push('bot', '🔒 A abrir Privacidade…'); setTimeout(() => onOpenModal?.('privacy'), 600); return; }
 
-    // resposta textual
     respond(action);
   };
 
   return (
     <>
-      {/* ── Botão flutuante ── */}
+      {/* Botão flutuante */}
       <button
         onClick={() => setOpen(v => !v)}
         aria-label={open ? 'Fechar assistente' : 'Abrir assistente'}
         style={{
-          position: 'fixed', bottom: 20, right: 20, zIndex: 9000,
-          width: 60, height: 60, borderRadius: '50%',
+          position: 'fixed',
+          bottom: 'calc(20px + env(safe-area-inset-bottom))',
+          right: 'calc(32px + env(safe-area-inset-right))',
+          zIndex: 9000,
+          width: 60,
+          height: 60,
+          borderRadius: '50%',
           background: 'linear-gradient(135deg,#CC0000,#F0C040)',
-          border: 'none', cursor: 'pointer',
+          border: 'none',
+          cursor: 'pointer',
           boxShadow: '0 8px 28px rgba(204,0,0,0.45)',
-          fontSize: '1.8rem', color: '#fff',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
           transition: 'transform 0.25s ease, box-shadow 0.25s ease',
         }}
-        onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.12)'; e.currentTarget.style.boxShadow = '0 12px 36px rgba(204,0,0,0.6)'; }}
+        onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.08)'; e.currentTarget.style.boxShadow = '0 12px 36px rgba(204,0,0,0.6)'; }}
         onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = '0 8px 28px rgba(204,0,0,0.45)'; }}
       >
-        {open ? '✕' : '💬'}
+        {open ? (
+          <div style={{
+            width: 60,
+            height: 60,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '1.6rem',
+            fontWeight: 700,
+            color: '#fff',
+            background: 'linear-gradient(135deg,#CC0000,#F0C040)',
+            borderRadius: '50%',
+          }}>
+            ✕
+          </div>
+        ) : (
+          <div style={{ position: 'relative', width: 60, height: 60 }}>
+            <img
+              src="/avatar-bot.webp"
+              alt="Assistente KazolaGlow"
+              style={{
+                width: 60,
+                height: 60,
+                borderRadius: '50%',
+                objectFit: 'cover',
+                objectPosition: '50% 50%',
+                border: '2px solid rgba(245,197,24,0.5)',
+              }}
+              onError={(e) => {
+                console.error('❌ Avatar não carregado:', e);
+                e.currentTarget.style.display = 'none';
+              }}
+            />
+            <div className="pulse-green" style={{
+              position: 'absolute',
+              bottom:-4,
+              right: -4,
+              zIndex: 9999,
+              width: 14,
+              height: 14,
+              borderRadius: '50%',
+              background: '#22c55e',
+              border: '2px solid #0d0d1f',
+            }} />
+          </div>
+        )}
       </button>
 
-      {/* ── Janela do chat ── */}
+      {/* Janela do chat */}
       {open && (
         <div
           role="dialog"
           aria-label="Assistente KazolaGlow"
           style={{
-            position: 'fixed', bottom: 90, right: 20, zIndex: 9000,
+            position: 'fixed',
+            bottom: 90,
+            right: 20,
+            zIndex: 9000,
             width: 'min(400px, calc(100vw - 40px))',
             height: 'min(580px, calc(100vh - 120px))',
             background: '#0d0d1f',
             border: '1px solid rgba(245,197,24,0.3)',
             borderRadius: 22,
-            display: 'flex', flexDirection: 'column',
+            display: 'flex',
+            flexDirection: 'column',
             boxShadow: '0 24px 80px rgba(0,0,0,0.7)',
             overflow: 'hidden',
             animation: 'kgChatPop 0.35s cubic-bezier(0.34,1.56,0.64,1)',
@@ -513,6 +608,11 @@ export default function ChatBot({ session, onUpgrade, onLogin, onOpenModal, onSc
               from { opacity:0; transform:scale(0.8) translateY(40px); }
               to   { opacity:1; transform:scale(1) translateY(0); }
             }
+            @keyframes pulse-green {
+              0%   { transform: scale(1);   opacity: 1; }
+              50%  { transform: scale(1.5); opacity: 0.5; }
+              100% { transform: scale(1);   opacity: 1; }
+              }
             .kg-bot {
               background: rgba(255,255,255,0.09);
               border-radius: 16px 16px 16px 6px;
@@ -559,15 +659,43 @@ export default function ChatBot({ session, onUpgrade, onLogin, onOpenModal, onSc
             .kg-scroll::-webkit-scrollbar-thumb { background: rgba(245,197,24,0.2); border-radius: 4px; }
           `}</style>
 
-          {/* Header */}
+          {/* Header com avatar */}
           <div style={{
             background: 'linear-gradient(135deg,#0f0f25,#151530)',
             padding: '0.85rem 1rem',
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
             borderBottom: '1px solid rgba(245,197,24,0.15)',
             flexShrink: 0,
           }}>
-            <div style={{ fontSize: '1.5rem' }}>🎱</div>
+            <div style={{ position: 'relative', width: 44, height: 44, flexShrink: 0 }}>
+              <img
+                src="/avatar-bot.webp"
+                alt="Assistente KazolaGlow"
+                style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: '50%',
+                  objectFit: 'cover',
+                  objectPosition: '50% 50%',
+                  border: '2px solid rgba(245,197,24,0.6)',
+                  boxShadow: '0 0 12px rgba(204,0,0,0.5)',
+                  animation: 'pulse-green 2s ease-in-out infinite',
+                }}
+              />
+              <div style={{
+                position: 'absolute',
+                bottom: 1,
+                right: 1,
+                width: 11,
+                height: 11,
+                borderRadius: '50%',
+                background: '#22c55e',
+                border: '2px solid #0f0f25',
+              }} />
+            </div>
+
             <div style={{ textAlign: 'center' }}>
               <div style={{ color: '#fff', fontWeight: 700, fontSize: '0.92rem', letterSpacing: '0.01em' }}>
                 Assistente KazolaGlow
@@ -576,13 +704,14 @@ export default function ChatBot({ session, onUpgrade, onLogin, onOpenModal, onSc
                 ● Online · Loto 5/90 Angola
               </div>
             </div>
+
             <button
               className="kg-btn"
               onClick={() => {
                 setBusy(true);
                 setTimeout(() => {
-                  const { answer, btns } = getAnswer('menu', session);
-                  setMsgs([{ id: idRef.current++, from: 'bot', text: answer, btns }]);
+                  const { answer, html, btns } = getAnswer('menu', session);
+                  setMsgs([{ id: idRef.current++, from: 'bot', text: answer, html, btns }]);
                   setBusy(false);
                 }, 200);
               }}
@@ -592,31 +721,66 @@ export default function ChatBot({ session, onUpgrade, onLogin, onOpenModal, onSc
             </button>
           </div>
 
-          {/* Mensagens */}
+          {/* Mensagens com avatar ao lado de cada mensagem do bot */}
           <div
             className="kg-scroll"
             style={{
-              flex: 1, overflowY: 'auto',
+              flex: 1,
+              overflowY: 'auto',
               padding: '1rem',
-              display: 'flex', flexDirection: 'column', gap: '0.85rem',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.85rem',
             }}
           >
             {msgs.map(m => (
               <div
                 key={m.id}
                 style={{
-                  display: 'flex', flexDirection: 'column',
+                  display: 'flex',
+                  flexDirection: 'column',
                   alignItems: m.from === 'bot' ? 'flex-start' : 'flex-end',
                   gap: '0.45rem',
                 }}
               >
-                <div className={m.from === 'bot' ? 'kg-bot' : 'kg-user'}>
-                  {m.text.split('\n').map((line, i) => (
-                    <p key={i} style={{ margin: '0 0 0.25rem 0' }}>{line}</p>
-                  ))}
-                </div>
+                {m.from === 'bot' && (
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}>
+                    <img
+                      src="/avatar-bot.webp"
+                      alt=""
+                      style={{
+                        width: 32,
+                        height: 32,
+                        borderRadius: '50%',
+                        objectFit: 'cover',
+                        objectPosition: '50% 50%',
+                        border: '1.5px solid rgba(245,197,24,0.5)',
+                        flexShrink: 0,
+                        marginTop: '0.2rem',
+                      }}
+                    />
+                    <div className="kg-bot">
+                      {m.html ? (
+                        <div dangerouslySetInnerHTML={{ __html: m.html }} />
+                      ) : (
+                        m.text.split('\n').map((line, i) => (
+                          <p key={i} style={{ margin: '0 0 0.25rem 0' }}>{line}</p>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {m.from === 'user' && (
+                  <div className="kg-user">
+                    {m.text.split('\n').map((line, i) => (
+                      <p key={i} style={{ margin: '0 0 0.25rem 0' }}>{line}</p>
+                    ))}
+                  </div>
+                )}
+
                 {m.btns && m.from === 'bot' && (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem', maxWidth: '92%' }}>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem', maxWidth: '92%', marginLeft: 40 }}>
                     {m.btns.map(b => (
                       <button key={b.action} className="kg-btn" onClick={() => handleBtn(b.action, b.label)}>
                         {b.label}
@@ -627,8 +791,24 @@ export default function ChatBot({ session, onUpgrade, onLogin, onOpenModal, onSc
               </div>
             ))}
             {busy && (
-              <div className="kg-bot" style={{ opacity: 0.6, fontStyle: 'italic' }}>
-                ⏳ A pensar…
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}>
+                <img
+                  src="/avatar-bot.webp"
+                  alt=""
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: '50%',
+                    objectFit: 'cover',
+                    objectPosition: '50% 20%',
+                    border: '1.5px solid rgba(245,197,24,0.5)',
+                    flexShrink: 0,
+                    opacity: 0.6,
+                  }}
+                />
+                <div className="kg-bot" style={{ opacity: 0.6, fontStyle: 'italic' }}>
+                  ⏳ A pensar…
+                </div>
               </div>
             )}
             <div ref={bottomRef} />
@@ -666,8 +846,11 @@ export default function ChatBot({ session, onUpgrade, onLogin, onOpenModal, onSc
                   background: busy
                     ? 'rgba(204,0,0,0.4)'
                     : 'linear-gradient(135deg,#CC0000,#990000)',
-                  border: 'none', borderRadius: 28,
-                  color: '#fff', width: 46, height: 46,
+                  border: 'none',
+                  borderRadius: 28,
+                  color: '#fff',
+                  width: 46,
+                  height: 46,
                   cursor: busy ? 'not-allowed' : 'pointer',
                   fontSize: '1.1rem',
                   transition: 'background 0.2s',

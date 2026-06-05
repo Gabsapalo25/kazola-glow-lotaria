@@ -247,13 +247,14 @@ export default function UpgradeModal({ session, onUpgraded, onClose }: Props) {
                 </p>
               </div>
 
+              {/* ── BLOCO DE PAGAMENTO ── */}
               <div style={{
                 background:'rgba(245,197,24,0.07)',
                 border:'1px solid rgba(245,197,24,0.2)',
                 borderRadius:12, padding:'1.1rem', marginBottom:'1.2rem',
                 fontSize:'0.85rem', lineHeight:1.6,
               }}>
-                <p style={{ margin:'0 0 0.5rem', fontWeight:700, color:'#F5C518' }}>📋 DADOS BANCÁRIOS</p>
+                <p style={{ margin:'0 0 0.75rem', fontWeight:700, color:'#F5C518' }}>📋 DADOS BANCÁRIOS</p>
                 <p style={{ margin:'0 0 0.25rem', color:'rgba(255,255,255,0.6)' }}>
                   <strong style={{color:'#fff'}}>Banco:</strong> BAI
                 </p>
@@ -263,9 +264,42 @@ export default function UpgradeModal({ session, onUpgraded, onClose }: Props) {
                 <p style={{ margin:'0 0 0.25rem', color:'rgba(255,255,255,0.6)' }}>
                   <strong style={{color:'#fff'}}>IBAN:</strong> <span style={{fontSize:'0.75rem'}}>AO06 0040 0000 1859 5631 1019 4</span>
                 </p>
-                <p style={{ margin:'0.5rem 0 0', color:'rgba(255,255,255,0.4)', fontSize:'0.78rem' }}>
+                <p style={{ margin:'0.5rem 0 0.75rem', color:'rgba(255,255,255,0.4)', fontSize:'0.78rem' }}>
                   💰 <strong>Valor a pagar:</strong> {valor}
                 </p>
+
+                {/* ── SEPARADOR ── */}
+                <div style={{ borderTop:'1px solid rgba(255,255,255,0.08)', margin:'0.75rem 0' }} />
+
+                {/* ── MCX EXPRESS ── */}
+                <div style={{
+                  display:'flex', alignItems:'center', gap:'10px',
+                  background:'rgba(255,140,0,0.1)',
+                  border:'1px solid rgba(255,140,0,0.35)',
+                  borderRadius:10, padding:'0.75rem',
+                }}>
+                  <img
+                    src="/mcx-express.png"
+                    alt="Multicaixa Express"
+                    style={{ width:42, height:42, borderRadius:9, flexShrink:0, objectFit:'cover' }}
+                  />
+                  <div>
+                    <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:3 }}>
+                      <span style={{ color:'#FF8C00', fontWeight:700, fontSize:'0.88rem' }}>Multicaixa Express</span>
+                      <span style={{
+                        background:'#FF8C00', color:'#000',
+                        fontSize:'0.6rem', fontWeight:900,
+                        padding:'1px 6px', borderRadius:20, letterSpacing:'0.06em',
+                      }}>RECOMENDADO</span>
+                    </div>
+                    <div style={{ color:'rgba(255,255,255,0.7)', fontSize:'0.8rem' }}>
+                      🔢 Número: <strong>923 379 486</strong>
+                    </div>
+                    <div style={{ color:'rgba(255,255,255,0.45)', fontSize:'0.73rem', marginTop:2 }}>
+                      ✅ Pagamento imediato · sem esperas bancárias
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <form onSubmit={handleRegistoSubmit}>
@@ -314,6 +348,7 @@ export default function UpgradeModal({ session, onUpgraded, onClose }: Props) {
                 </button>
               </form>
 
+              {/* ── RODAPÉ DE INSTRUÇÃO ── */}
               <div style={{
                 marginTop:'1rem',
                 background:'rgba(245,197,24,0.05)',
@@ -321,9 +356,12 @@ export default function UpgradeModal({ session, onUpgraded, onClose }: Props) {
                 borderRadius:10, padding:'0.8rem',
                 fontSize:'0.75rem', color:'rgba(255,255,255,0.5)',
               }}>
-                📧 Após transferência, envia o comprovativo para <strong style={{color:'#F5C518'}}>glowscalepro@gmail.com</strong><br/>
-                com o assunto igual à referência que será gerada.<br/>
-                💬 WhatsApp: +244 923 379 486 (entrega manual)
+                📧 Após pagamento, envia o comprovativo para <strong style={{color:'#F5C518'}}>glowscalepro@gmail.com</strong><br/>
+                com o assunto igual à referência gerada.<br/>
+                <span style={{color:'rgba(255,140,0,0.85)'}}>
+                  ⚡ O envio por email garante activação automática em menos de 5 minutos.
+                </span><br/>
+                💬 WhatsApp: +244 923 379 486 (activação manual — pode demorar mais)
               </div>
 
               <button className="upg-btn-ghost" onClick={() => setStep(1)}>← Voltar aos planos</button>

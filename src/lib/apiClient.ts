@@ -12,6 +12,11 @@ async function gasPost<T>(payload: object): Promise<T> {
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify(payload),
   });
+  
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  }
+  
   return response.json();
 }
 
@@ -19,6 +24,11 @@ async function gasGet<T>(params: Record<string, string>): Promise<T> {
   const qs  = new URLSearchParams(params).toString();
   const url = `${KAZOLA_SCRIPT_URL}?${qs}`;
   const response = await fetch(url);
+  
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  }
+  
   return response.json();
 }
 
@@ -80,6 +90,7 @@ export async function fetchRealDraws(): Promise<{ draws: Draw[]; hasToday: boole
     try {
       localStorage.setItem('kazola_last_draws', JSON.stringify(draws));
       localStorage.setItem('kazola_last_draws_date', new Date().toISOString());
+      localStorage.setItem('kazola_last_draws_ttl', String(Date.now() + 3600000));
     } catch { /* silent */ }
     
     const todayStr = new Date().toISOString().split('T')[0];
@@ -92,7 +103,9 @@ export async function fetchRealDraws(): Promise<{ draws: Draw[]; hasToday: boole
     
     try {
       const cached = localStorage.getItem('kazola_last_draws');
-      if (cached) {
+      const ttl = localStorage.getItem('kazola_last_draws_ttl');
+      
+      if (cached && ttl && Date.now() < parseInt(ttl)) {
         console.log('📦 A usar dados em cache do localStorage');
         return { draws: JSON.parse(cached), hasToday: false };
       }
