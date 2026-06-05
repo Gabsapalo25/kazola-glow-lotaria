@@ -516,7 +516,7 @@ export default function ChatBot({ session, onUpgrade, onLogin, onOpenModal, onSc
         style={{
           position: 'fixed',
           bottom: 'calc(20px + env(safe-area-inset-bottom))',
-          right: 'calc(32px + env(safe-area-inset-right))',
+          left: 'calc(16px + env(safe-area-inset-left))',
           zIndex: 9000,
           width: 60,
           height: 60,
@@ -590,7 +590,7 @@ export default function ChatBot({ session, onUpgrade, onLogin, onOpenModal, onSc
           style={{
             position: 'fixed',
             bottom: 90,
-            right: 20,
+            left: 20,
             zIndex: 9000,
             width: 'min(400px, calc(100vw - 40px))',
             height: 'min(580px, calc(100vh - 120px))',
