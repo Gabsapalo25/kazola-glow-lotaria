@@ -1,95 +1,61 @@
 // src/components/PlanoSemanal.tsx
 import React, { useState, useEffect, useMemo } from 'react';
-import Ball from './Ball';
 import Card from './Card';
+import Ball from './Ball';
 import { UserSession, shouldSync, updateLastSync } from '../lib/session';
-import { generateLine } from '../lib/generator';
-import { Draw } from '../data/history';
 import { saveUserData, loadUserData, deleteUserData } from '../lib/apiClient';
 
-interface PlanoCombinacao {
-  id: number;
+interface PlanoAposta {
+  id: string;
+  data: string;
+  estrategia: string;
   numeros: number[];
-  metodo: 'equilibrado' | 'frequencia' | 'montecarlo' | 'aleatorio';
-  sessaoSugerida: string;
-  diaSugerido: string;
-  valorAposta: number;
+  stake: number;
+  tipo: 'main' | 'backup';
+  executado: boolean;
 }
 
-interface PlanoSemana {
-  semana: string;
-  orcamento: number;
-  valorPorAposta: number;
-  totalApostas: number;
-  combinacoes: PlanoCombinacao[];
-  geradoEm: number;
+interface Draw {
+  id: string;
+  date: string;
+  numbers: number[];
 }
 
 interface PlanoSemanalProps {
   session: UserSession;
   weights: number[];
-  hotCold: { hot: number[]; cold: number[] };
-  gaps: { n: number; gap: number }[];
-  draws: Draw[];
+  hotCold?: { hot: number[]; cold: number[] };
+  gaps?: { n: number; gap: number }[];
+  draws?: Draw[];
   onSessionUpdate?: (session: UserSession) => void;
 }
 
-const fmtKz = (value: number) => 
-  value.toLocaleString('pt-AO', { style: 'currency', currency: 'AOA' });
+const getStorageKey = (email: string) => `kazola_plano_semanal_${email}`;
 
-const getWeekNumber = (date: Date): number => {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7);
-  const week1 = new Date(d.getFullYear(), 0, 4);
-  return 1 + Math.round(((d.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
-};
+const diasSemana = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
 
-const getCurrentWeekKey = (): string => {
-  const now = new Date();
-  const weekNum = getWeekNumber(now);
-  return `${now.getFullYear()}-W${weekNum.toString().padStart(2, '0')}`;
-};
-
-const getStorageKey = (email: string, semana: string) => `kazola_plano_${email}_${semana}`;
-
-const diasDaSemana = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
-const sessoes = ['🌅 Fezada', '☀️ Kazola', '🌙 Eskebra', '🔥 Aqueceu'];
-
-const getDataParaDia = (diaIndex: number): string => {
-  const now = new Date();
-  const currentDay = now.getDay();
-  const daysToAdd = (diaIndex + 1 - (currentDay === 0 ? 7 : currentDay));
-  const targetDate = new Date(now);
-  targetDate.setDate(now.getDate() + daysToAdd);
-  return targetDate.toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit' });
-};
-
-const getMetodoLabel = (metodo: string): string => {
-  const labels: Record<string, string> = {
-    equilibrado: '⚖️ Equilibrado',
-    frequencia: '📊 Frequência',
-    montecarlo: '🎲 Monte Carlo',
-    aleatorio: '🎯 Aleatório'
-  };
-  return labels[metodo] || metodo;
-};
-
-const arraysEqual = (a: number[], b: number[]): boolean => {
-  if (!a || !b) return false;
-  const sortedA = [...a].sort((x, y) => x - y);
-  const sortedB = [...b].sort((x, y) => x - y);
-  return sortedA.length === sortedB.length && sortedA.every((val, idx) => val === sortedB[idx]);
-};
-
-// Gerar combinação fallback (aleatória sem duplicados)
-const gerarFallback = (exclude: number[] = []): number[] => {
+// Função para gerar números aleatórios baseados em pesos
+const gerarCombinacaoPonderada = (weights: number[]): number[] => {
+  const total = weights.reduce((a, b) => a + b, 0);
+  if (total === 0) {
+    // Fallback para distribuição uniforme
+    const nums: number[] = [];
+    while (nums.length < 5) {
+      const n = Math.floor(Math.random() * 90) + 1;
+      if (!nums.includes(n)) nums.push(n);
+    }
+    return nums.sort((a, b) => a - b);
+  }
+  
   const nums: number[] = [];
   while (nums.length < 5) {
-    const n = Math.floor(Math.random() * 90) + 1;
-    if (!nums.includes(n) && !exclude.includes(n)) {
-      nums.push(n);
+    let r = Math.random() * total;
+    let idx = 1;
+    while (r > weights[idx]) {
+      r -= weights[idx];
+      idx++;
     }
+    if (!nums.includes(idx)) nums.push(idx);
   }
   return nums.sort((a, b) => a - b);
 };
@@ -97,464 +63,509 @@ const gerarFallback = (exclude: number[] = []): number[] => {
 const PlanoSemanal: React.FC<PlanoSemanalProps> = ({ 
   session, 
   weights, 
-  hotCold, 
-  gaps, 
-  draws,
+  hotCold = { hot: [], cold: [] }, 
+  gaps = [], 
+  draws = [],
   onSessionUpdate 
 }) => {
-  const [orcamento, setOrcamento] = useState<number>(1000);
-  const [valorPorAposta, setValorPorAposta] = useState<number>(50);
-  const [planoActual, setPlanoActual] = useState<PlanoSemana | null>(null);
-  const [mostrarConfig, setMostrarConfig] = useState<boolean>(false);
-  const [copiado, setCopiado] = useState<boolean>(false);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [syncing, setSyncing] = useState<boolean>(false);
-  const [syncError, setSyncError] = useState<string | null>(null);
+  const [plano, setPlano] = useState<PlanoAposta[]>([]);
+  const [apostasMain, setApostasMain] = useState<number>(7);
+  const [apostasBackup, setApostasBackup] = useState<number>(2);
+  const [stake, setStake] = useState<number>(100);
+  const [sincronizando, setSincronizando] = useState(false);
+  const [erroSync, setErroSync] = useState<string | null>(null);
+  const [editandoId, setEditandoId] = useState<string | null>(null);
+  const [editandoNumeros, setEditandoNumeros] = useState<number[]>([]);
 
-  const semanaActualKey = getCurrentWeekKey();
-
-  // ==================== SINCRONIZAÇÃO COM O SERVIDOR ====================
-
-  // Carregar plano do servidor (cross-device)
-  const loadPlanoFromServer = async () => {
-    if (!shouldSync(session)) return;
-    
-    setSyncing(true);
-    setSyncError(null);
-    
-    try {
-      const result = await loadUserData(session.email, 'plano_semanal');
-      
-      if (result.ok && result.records) {
-        for (const record of result.records) {
-          if (record.record_id === semanaActualKey) {
-            try {
-              const serverPlano = JSON.parse(record.data) as PlanoSemana;
-              if (serverPlano && serverPlano.combinacoes) {
-                setPlanoActual(serverPlano);
-                // Guarda no localStorage como cache
-                const localKey = getStorageKey(session.email, semanaActualKey);
-                localStorage.setItem(localKey, JSON.stringify(serverPlano));
-                break;
-              }
-            } catch (e) {
-              console.error('Erro ao fazer parse do plano do servidor:', e);
-            }
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Erro ao carregar plano do servidor:', error);
-      setSyncError('Erro ao sincronizar com o servidor');
-    } finally {
-      setSyncing(false);
-    }
-  };
-
-  // Guardar plano no servidor
-  const savePlanoToServer = async (plano: PlanoSemana) => {
-    if (!shouldSync(session)) return;
-    
-    try {
-      await saveUserData(
-        session.email,
-        'plano_semanal',
-        plano.semana,
-        JSON.stringify(plano)
-      );
-      
-      // Actualiza timestamp de sync
-      if (onSessionUpdate) {
-        onSessionUpdate(updateLastSync(session));
-      }
-    } catch (error) {
-      console.error('Erro ao guardar plano no servidor:', error);
-      setSyncError('Erro ao sincronizar. O plano está guardado localmente.');
-    }
-  };
-
-  // Eliminar plano do servidor
-  const deletePlanoFromServer = async (semana: string) => {
-    if (!shouldSync(session)) return;
-    
-    try {
-      await deleteUserData(session.email, semana, 'plano_semanal');
-    } catch (error) {
-      console.error('Erro ao eliminar plano do servidor:', error);
-    }
-  };
-
-  // Carregar plano existente (local + servidor)
+  // Carregar plano do localStorage e sincronizar com servidor
   useEffect(() => {
-    const loadPlano = async () => {
-      // Primeiro, carrega do localStorage (rápido)
-      const localKey = getStorageKey(session.email, semanaActualKey);
-      const stored = localStorage.getItem(localKey);
-      if (stored) {
+    const carregarPlano = async () => {
+      const storageKey = getStorageKey(session.email);
+      const localData = localStorage.getItem(storageKey);
+      
+      if (localData) {
         try {
-          setPlanoActual(JSON.parse(stored));
+          const parsed = JSON.parse(localData);
+          setPlano(parsed);
         } catch (e) {
           console.error('Erro ao carregar plano local:', e);
         }
       }
-      
-      // Depois, carrega do servidor (cross-device) e sobrepõe se mais recente
-      await loadPlanoFromServer();
+
+      if (shouldSync(session)) {
+        setSincronizando(true);
+        try {
+          const result = await loadUserData(session.email, 'plano_semanal');
+          if (result.ok && result.records) {
+            const serverData: PlanoAposta[] = [];
+            for (const record of result.records) {
+              try {
+                const parsed = JSON.parse(record.data);
+                if (parsed.id && parsed.numeros) {
+                  serverData.push(parsed);
+                }
+              } catch (e) {
+                console.error('Erro ao fazer parse:', e);
+              }
+            }
+            if (serverData.length > 0) {
+              setPlano(serverData);
+              localStorage.setItem(storageKey, JSON.stringify(serverData));
+            }
+          }
+        } catch (error) {
+          console.error('Erro ao sincronizar plano:', error);
+          setErroSync('Erro ao sincronizar com o servidor');
+        } finally {
+          setSincronizando(false);
+        }
+      }
     };
-    
-    loadPlano();
-  }, [session.email, semanaActualKey]);
 
-  const totalApostasCalculado = Math.floor(orcamento / valorPorAposta);
+    carregarPlano();
+  }, [session.email, session]);
 
-  // Gerar combinação única sem repetição (COM FALLBACK)
-  const gerarCombinacaoUnica = (
-    tentativa: number,
-    existingCombos: number[][],
-    metodoEscolhido: 'equilibrado' | 'frequencia' | 'montecarlo' | 'aleatorio'
-  ): number[] => {
-    try {
-      let numeros: number[] = [];
-      
-      if (metodoEscolhido === 'aleatorio') {
-        numeros = gerarFallback();
-      } else {
-        const result = generateLine(weights, metodoEscolhido, { hotCold, gaps, draws });
-        numeros = result?.numbers || [];
-        
-        if (numeros.length === 0) {
-          console.warn(`Falha no método ${metodoEscolhido}, usando fallback`);
-          numeros = gerarFallback();
+  // Salvar plano no localStorage e sincronizar
+  const salvarPlano = async (novoPlano: PlanoAposta[]) => {
+    const storageKey = getStorageKey(session.email);
+    localStorage.setItem(storageKey, JSON.stringify(novoPlano));
+    setPlano(novoPlano);
+
+    if (shouldSync(session)) {
+      for (const aposta of novoPlano) {
+        try {
+          await saveUserData(
+            session.email,
+            'plano_semanal',
+            aposta.id,
+            JSON.stringify(aposta)
+          );
+        } catch (error) {
+          console.error('Erro ao sincronizar aposta:', error);
+          setErroSync('Erro ao sincronizar. Os dados estão guardados localmente.');
         }
       }
       
-      if (numeros.length === 0) {
-        numeros = gerarFallback();
+      if (onSessionUpdate) {
+        onSessionUpdate(updateLastSync(session));
       }
-      
-      const isDuplicate = existingCombos.some(combo => arraysEqual(combo, numeros));
-      
-      if (isDuplicate && tentativa < 15) {
-        return gerarCombinacaoUnica(tentativa + 1, existingCombos, metodoEscolhido);
-      }
-      return numeros;
-    } catch (error) {
-      console.error('Erro ao gerar combinação:', error);
-      return gerarFallback();
     }
   };
 
-  // Gerar plano completo
-  const gerarPlano = async () => {
-    if (totalApostasCalculado === 0) {
-      alert('Orçamento insuficiente para o valor da aposta seleccionado');
+  // Gerar plano semanal
+  const gerarPlano = () => {
+    if (apostasMain + apostasBackup > 21) {
+      alert('Máximo de 21 apostas por semana (14 principais + 7 reservas)');
       return;
     }
-    
-    if (totalApostasCalculado > 30) {
-      alert('Máximo de 30 apostas por plano para garantir qualidade.');
-      return;
-    }
-    
-    setLoading(true);
-    
-    await new Promise(resolve => setTimeout(resolve, 100));
 
-    const apostasPorDia = Math.floor(totalApostasCalculado / 7);
-    const resto = totalApostasCalculado % 7;
-    const apostasPorDiaLista = diasDaSemana.map((_, idx) => apostasPorDia + (idx < resto ? 1 : 0));
-    
-    const metodos: ('equilibrado' | 'frequencia' | 'montecarlo' | 'aleatorio')[] = [];
-    for (let i = 0; i < totalApostasCalculado; i++) {
-      const rand = Math.random() * 100;
-      if (rand < 40) metodos.push('equilibrado');
-      else if (rand < 70) metodos.push('montecarlo');
-      else if (rand < 90) metodos.push('frequencia');
-      else metodos.push('aleatorio');
-    }
-    
-    let idCounter = 0;
-    const todasCombinacoes: PlanoCombinacao[] = [];
-    const usedCombos: number[][] = [];
-    
-    for (let diaIdx = 0; diaIdx < diasDaSemana.length; diaIdx++) {
-      const numApostasDia = apostasPorDiaLista[diaIdx];
-      const dia = diasDaSemana[diaIdx];
+    const novoPlano: PlanoAposta[] = [];
+    const hoje = new Date();
+    const diaSemanaAtual = hoje.getDay();
+    const diasAteSegunda = diaSemanaAtual === 0 ? 6 : diaSemanaAtual - 1;
+    const inicioSemana = new Date(hoje);
+    inicioSemana.setDate(hoje.getDate() - diasAteSegunda);
+
+    // Gerar apostas principais
+    for (let i = 0; i < apostasMain; i++) {
+      const dataAposta = new Date(inicioSemana);
+      dataAposta.setDate(inicioSemana.getDate() + i);
       
-      for (let i = 0; i < numApostasDia; i++) {
-        const metodoIndex = todasCombinacoes.length % metodos.length;
-        const metodo = metodos[metodoIndex];
-        const sessaoIndex = todasCombinacoes.length % sessoes.length;
-        
-        const numeros = gerarCombinacaoUnica(0, usedCombos, metodo);
-        if (numeros.length === 5) {
-          usedCombos.push(numeros);
-          
-          todasCombinacoes.push({
-            id: idCounter++,
-            numeros,
-            metodo,
-            sessaoSugerida: sessoes[sessaoIndex],
-            diaSugerido: dia,
-            valorAposta: valorPorAposta,
-          });
+      // Estratégia baseada no dia
+      let estrategia = 'equilibrada';
+      if (i % 3 === 0 && hotCold.hot.length > 0) estrategia = 'hot';
+      else if (i % 3 === 1 && hotCold.cold.length > 0) estrategia = 'cold';
+      else if (i % 3 === 2 && gaps.length > 0) estrategia = 'gap';
+      
+      const numeros = gerarCombinacaoPonderada(weights);
+      
+      novoPlano.push({
+        id: `main-${i}-${Date.now()}`,
+        data: dataAposta.toISOString().split('T')[0],
+        estrategia,
+        numeros,
+        stake,
+        tipo: 'main',
+        executado: false,
+      });
+    }
+
+    // Gerar apostas de reserva
+    for (let i = 0; i < apostasBackup; i++) {
+      const dataAposta = new Date(inicioSemana);
+      dataAposta.setDate(inicioSemana.getDate() + apostasMain + i);
+      
+      const numeros = gerarCombinacaoPonderada(weights);
+      
+      novoPlano.push({
+        id: `backup-${i}-${Date.now()}`,
+        data: dataAposta.toISOString().split('T')[0],
+        estrategia: 'backup',
+        numeros,
+        stake,
+        tipo: 'backup',
+        executado: false,
+      });
+    }
+
+    salvarPlano(novoPlano);
+  };
+
+  // Marcar como executado
+  const marcarExecutado = async (id: string) => {
+    const novoPlano = plano.map(aposta =>
+      aposta.id === id ? { ...aposta, executado: true } : aposta
+    );
+    await salvarPlano(novoPlano);
+  };
+
+  // Eliminar aposta
+  const eliminarAposta = async (id: string) => {
+    if (window.confirm('Tens a certeza que queres eliminar esta aposta?')) {
+      const novoPlano = plano.filter(aposta => aposta.id !== id);
+      await salvarPlano(novoPlano);
+      
+      if (shouldSync(session)) {
+        try {
+          await deleteUserData(session.email, id, 'plano_semanal');
+        } catch (error) {
+          console.error('Erro ao eliminar do servidor:', error);
         }
       }
     }
-    
-    setLoading(false);
-    
-    if (todasCombinacoes.length === 0) {
-      alert('Erro ao gerar combinações. Tenta novamente.');
-      return;
-    }
-    
-    const novoPlano: PlanoSemana = {
-      semana: semanaActualKey,
-      orcamento,
-      valorPorAposta,
-      totalApostas: todasCombinacoes.length,
-      combinacoes: todasCombinacoes,
-      geradoEm: Date.now(),
-    };
-    
-    // Guarda no localStorage
-    const localKey = getStorageKey(session.email, semanaActualKey);
-    localStorage.setItem(localKey, JSON.stringify(novoPlano));
-    setPlanoActual(novoPlano);
-    
-    // Guarda no servidor (cross-device)
-    await savePlanoToServer(novoPlano);
-    
-    setMostrarConfig(false);
   };
 
-  const gerarNovoPlano = async () => {
-    // Se já existe plano para esta semana, elimina do servidor
-    if (planoActual && planoActual.semana === semanaActualKey) {
-      await deletePlanoFromServer(semanaActualKey);
-    }
-    setMostrarConfig(true);
+  // Editar aposta
+  const iniciarEdicao = (aposta: PlanoAposta) => {
+    setEditandoId(aposta.id);
+    setEditandoNumeros([...aposta.numeros]);
   };
 
-  const copiarPlano = () => {
-    if (!planoActual) return;
-    
-    let texto = `📅 PLANO SEMANAL - Semana ${planoActual.semana}\n`;
-    texto += `💰 Orçamento: ${fmtKz(planoActual.orcamento)}\n`;
-    texto += `🎯 Total de apostas: ${planoActual.totalApostas}\n`;
-    texto += `💵 Valor por aposta: ${fmtKz(planoActual.valorPorAposta)}\n`;
-    texto += `${'='.repeat(50)}\n\n`;
-    
-    for (const dia of diasDaSemana) {
-      const apostasDia = planoActual.combinacoes.filter(c => c.diaSugerido === dia);
-      if (apostasDia.length > 0) {
-        texto += `📌 ${dia} (${getDataParaDia(diasDaSemana.indexOf(dia))})\n`;
-        apostasDia.forEach((aposta, idx) => {
-          texto += `  ${idx + 1}. [${aposta.numeros.join(', ')}] - ${getMetodoLabel(aposta.metodo)}\n`;
-        });
-        texto += '\n';
+  const salvarEdicao = async () => {
+    if (editandoId && editandoNumeros.length === 5 && new Set(editandoNumeros).size === 5) {
+      const novoPlano = plano.map(aposta =>
+        aposta.id === editandoId ? { ...aposta, numeros: [...editandoNumeros] } : aposta
+      );
+      await salvarPlano(novoPlano);
+      setEditandoId(null);
+      setEditandoNumeros([]);
+    } else {
+      alert('Insere 5 números válidos sem repetições');
+    }
+  };
+
+  const atualizarNumeroEdicao = (idx: number, valor: string) => {
+    const num = parseInt(valor);
+    if (!isNaN(num) && num >= 1 && num <= 90) {
+      const novos = [...editandoNumeros];
+      novos[idx] = num;
+      setEditandoNumeros(novos);
+    }
+  };
+
+  // Limpar plano
+  const limparPlano = async () => {
+    if (window.confirm('Tens a certeza que queres limpar todo o plano semanal?')) {
+      await salvarPlano([]);
+      if (shouldSync(session)) {
+        // Nota: Limpeza em massa seria melhor implementada no backend
+        for (const aposta of plano) {
+          try {
+            await deleteUserData(session.email, aposta.id, 'plano_semanal');
+          } catch (error) {
+            console.error('Erro ao eliminar do servidor:', error);
+          }
+        }
       }
     }
-    
-    navigator.clipboard.writeText(texto);
-    setCopiado(true);
-    setTimeout(() => setCopiado(false), 2000);
   };
 
-  const estatisticasPlano = useMemo(() => {
-    if (!planoActual) return null;
+  // Agrupar apostas por dia
+  const apostasPorDia = useMemo(() => {
+    const agrupadas: Record<string, PlanoAposta[]> = {};
     
-    const contagemMetodos: Record<string, number> = {
-      equilibrado: 0,
-      frequencia: 0,
-      montecarlo: 0,
-      aleatorio: 0,
-    };
+    for (let i = 0; i < 7; i++) {
+      const hoje = new Date();
+      const diaSemanaAtual = hoje.getDay();
+      const diasAteSegunda = diaSemanaAtual === 0 ? 6 : diaSemanaAtual - 1;
+      const inicioSemana = new Date(hoje);
+      inicioSemana.setDate(hoje.getDate() - diasAteSegunda);
+      
+      const data = new Date(inicioSemana);
+      data.setDate(inicioSemana.getDate() + i);
+      const dataStr = data.toISOString().split('T')[0];
+      agrupadas[dataStr] = [];
+    }
     
-    planoActual.combinacoes.forEach(c => {
-      contagemMetodos[c.metodo] = (contagemMetodos[c.metodo] || 0) + 1;
+    plano.forEach(aposta => {
+      if (agrupadas[aposta.data]) {
+        agrupadas[aposta.data].push(aposta);
+      }
     });
     
-    return contagemMetodos;
-  }, [planoActual]);
+    return agrupadas;
+  }, [plano]);
 
-  // ==================== CONFIGURAÇÃO ====================
-  if (!planoActual || mostrarConfig) {
-    return (
-      <Card title="📅 Gerar Plano Semanal" icon={<span>📅</span>}>
-        {/* Banner de sincronização */}
-        {syncing && (
-          <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-4 text-center text-blue-700 text-sm">
-            🔄 A sincronizar com o servidor...
-          </div>
-        )}
-        {syncError && (
-          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 text-center text-amber-700 text-sm">
-            ⚠️ {syncError}
-          </div>
-        )}
-        {shouldSync(session) && !syncing && (
-          <div className="bg-green-50 border border-green-200 rounded-xl p-2 mb-4 text-center text-green-700 text-xs">
-            ☁️ Planos sincronizados na nuvem — disponíveis em todos os dispositivos
-          </div>
-        )}
+  const custoTotal = plano.reduce((sum, aposta) => sum + aposta.stake, 0);
+  const executadas = plano.filter(aposta => aposta.executado).length;
+  const principais = plano.filter(aposta => aposta.tipo === 'main').length;
+  const reservas = plano.filter(aposta => aposta.tipo === 'backup').length;
 
-        <p className="text-neutral-600 mb-6 text-sm">
-          Define o teu orçamento semanal e o valor por aposta. O sistema irá gerar um plano equilibrado para toda a semana.
-        </p>
-        
-        <div className="space-y-4 mb-6">
-          <div>
-            <label className="block text-sm font-bold mb-1">Orçamento semanal (Kz)</label>
-            <input
-              type="number"
-              min="100"
-              max="10000"
-              step="100"
-              value={orcamento}
-              onChange={(e) => setOrcamento(parseInt(e.target.value) || 0)}
-              className="w-full rounded-xl ring-1 ring-neutral-200 px-3 py-2 text-sm"
-            />
-            <p className="text-xs text-neutral-500 mt-1">Mínimo 100 Kz · Máximo 10.000 Kz</p>
-          </div>
-          
-          <div>
-            <label className="block text-sm font-bold mb-1">Valor por aposta (Kz)</label>
-            <select
-              value={valorPorAposta}
-              onChange={(e) => setValorPorAposta(parseInt(e.target.value))}
-              className="w-full rounded-xl ring-1 ring-neutral-200 px-3 py-2 text-sm"
-            >
-              <option value={50}>50 Kz</option>
-              <option value={100}>100 Kz</option>
-              <option value={200}>200 Kz</option>
-              <option value={500}>500 Kz</option>
-              <option value={1000}>1000 Kz</option>
-            </select>
-          </div>
-          
-          <div className="bg-neutral-100 rounded-xl p-4 text-center">
-            <div className="text-sm text-neutral-600">Total de apostas no plano</div>
-            <div className="text-4xl font-display font-black text-red-600">{totalApostasCalculado}</div>
-            {totalApostasCalculado === 0 && (
-              <p className="text-xs text-red-500 mt-1">Orçamento insuficiente</p>
-            )}
-            {totalApostasCalculado > 30 && (
-              <p className="text-xs text-amber-500 mt-1">Máximo recomendado: 30 apostas</p>
-            )}
-          </div>
-        </div>
-        
-        <button
-          onClick={gerarPlano}
-          disabled={totalApostasCalculado === 0 || loading}
-          className="w-full min-h-[52px] bg-red-600 hover:bg-red-700 disabled:bg-neutral-300 disabled:cursor-not-allowed text-white font-display font-black text-lg rounded-2xl transition"
-        >
-          {loading ? '⏳ A GERAR...' : '🎲 GERAR PLANO'}
-        </button>
-        
-        {planoActual && (
-          <button
-            onClick={() => setMostrarConfig(false)}
-            className="w-full mt-3 min-h-[44px] bg-neutral-100 hover:bg-neutral-200 font-bold rounded-2xl transition"
-          >
-            Cancelar
-          </button>
-        )}
-      </Card>
-    );
-  }
+  // Estilos inline
+  const glassCardStyle = {
+    background: 'rgba(17, 24, 39, 0.7)',
+    backdropFilter: 'blur(12px)',
+    border: '1px solid rgba(255, 255, 255, 0.08)',
+    borderRadius: '12px'
+  };
 
-  // ==================== PLANO GERADO ====================
+  const inputStyle = {
+    background: 'rgba(0, 0, 0, 0.3)',
+    color: '#F3F4F6',
+    border: '1px solid rgba(255, 255, 255, 0.12)',
+    borderRadius: '10px',
+    padding: '8px 12px',
+    fontSize: '14px',
+    outline: 'none'
+  };
+
+  const buttonCancelStyle = {
+    width: '100%',
+    marginTop: '12px',
+    minHeight: '44px',
+    background: 'rgba(17, 24, 39, 0.7)',
+    border: '1px solid rgba(255, 255, 255, 0.12)',
+    color: '#F3F4F6',
+    fontWeight: 700,
+    borderRadius: '16px',
+    cursor: 'pointer',
+    transition: 'all 0.2s'
+  };
+
   return (
     <div className="space-y-6">
-      {/* Banner de sincronização */}
-      {syncing && (
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-2 text-center text-blue-700 text-xs">
-          🔄 A sincronizar...
+      {sincronizando && (
+        <div style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '12px', padding: '12px', marginBottom: '16px', textAlign: 'center', color: '#60a5fa', fontSize: '14px' }}>
+          🔄 A sincronizar com o servidor...
         </div>
       )}
-      {syncError && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-2 text-center text-amber-700 text-xs">
-          ⚠️ {syncError}
+      {erroSync && (
+        <div style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: '12px', padding: '12px', marginBottom: '16px', textAlign: 'center', color: '#fbbf24', fontSize: '14px' }}>
+          ⚠️ {erroSync}
+        </div>
+      )}
+      {shouldSync(session) && !sincronizando && (
+        <div style={{ background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: '12px', padding: '8px', marginBottom: '16px', textAlign: 'center', color: '#4ade80', fontSize: '12px' }}>
+          ☁️ Plano sincronizado na nuvem — disponível em todos os dispositivos
         </div>
       )}
 
-      <Card title="📅 Plano Semanal" icon={<span>📅</span>}>
-        <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
+      <Card title="📅 Plano Semanal de Apostas" icon={<span>📅</span>}>
+        <p style={{ color: '#6B7280', marginBottom: '24px', fontSize: '14px' }}>
+          Gera um plano de apostas para a semana com base nas tuas estatísticas. 
+          Podes editar, marcar como executado ou eliminar cada aposta.
+        </p>
+
+        {/* Configuração do plano */}
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
           <div>
-            <p className="text-sm text-neutral-500">Semana {planoActual.semana}</p>
-            <p className="text-xs text-neutral-400">Gerado em {new Date(planoActual.geradoEm).toLocaleDateString('pt-PT')}</p>
+            <label style={{ fontSize: '12px', fontWeight: 700, marginBottom: '4px', display: 'block', color: '#9CA3AF' }}>Apostas principais</label>
+            <input
+              type="number"
+              min={1}
+              max={14}
+              value={apostasMain}
+              onChange={(e) => setApostasMain(Math.min(14, Math.max(1, parseInt(e.target.value) || 1)))}
+              style={inputStyle}
+              className="w-full"
+            />
+            <p style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px' }}>Máx 14 (uma por dia)</p>
           </div>
-          <div className="flex gap-2">
-            <button
-              onClick={copiarPlano}
-              className="px-4 py-2 rounded-xl bg-neutral-100 hover:bg-neutral-200 text-sm font-bold transition"
-            >
-              {copiado ? '✓ Copiado!' : '📋 Copiar'}
-            </button>
-            <button
-              onClick={gerarNovoPlano}
-              className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-bold transition"
-            >
-              🔄 Novo
-            </button>
+          <div>
+            <label style={{ fontSize: '12px', fontWeight: 700, marginBottom: '4px', display: 'block', color: '#9CA3AF' }}>Apostas reserva</label>
+            <input
+              type="number"
+              min={0}
+              max={7}
+              value={apostasBackup}
+              onChange={(e) => setApostasBackup(Math.min(7, Math.max(0, parseInt(e.target.value) || 0)))}
+              style={inputStyle}
+              className="w-full"
+            />
+            <p style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px' }}>Máx 7</p>
+          </div>
+          <div>
+            <label style={{ fontSize: '12px', fontWeight: 700, marginBottom: '4px', display: 'block', color: '#9CA3AF' }}>Valor por aposta (Kz)</label>
+            <input
+              type="number"
+              min={50}
+              max={1000}
+              step={50}
+              value={stake}
+              onChange={(e) => setStake(Math.min(1000, Math.max(50, parseInt(e.target.value) || 50)))}
+              style={inputStyle}
+              className="w-full"
+            />
           </div>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div className="bg-neutral-50 rounded-xl p-3 text-center">
-            <div className="text-xs text-neutral-500">Total apostas</div>
-            <div className="text-xl font-display font-black">{planoActual.totalApostas}</div>
-          </div>
-          <div className="bg-neutral-50 rounded-xl p-3 text-center">
-            <div className="text-xs text-neutral-500">Orçamento</div>
-            <div className="text-xl font-display font-black text-green-600">{fmtKz(planoActual.orcamento)}</div>
-          </div>
-          <div className="bg-neutral-50 rounded-xl p-3 text-center">
-            <div className="text-xs text-neutral-500">Valor/aposta</div>
-            <div className="text-xl font-display font-black">{fmtKz(planoActual.valorPorAposta)}</div>
-          </div>
-          <div className="bg-neutral-50 rounded-xl p-3">
-            <div className="text-xs text-neutral-500 text-center mb-1">Métodos</div>
-            <div className="text-xs space-y-0.5">
-              {estatisticasPlano && Object.entries(estatisticasPlano)
-                .filter(([, count]) => count > 0)
-                .map(([metodo, count]) => (
-                  <div key={metodo} className="text-neutral-600 flex justify-between">
-                    <span>{getMetodoLabel(metodo)}</span>
-                    <span className="font-bold">{count}</span>
-                  </div>
-                ))}
-            </div>
-          </div>
+        <div className="flex gap-3">
+          <button
+            onClick={gerarPlano}
+            className="flex-1 min-h-[52px] bg-red-600 hover:bg-red-700 text-white font-display font-black text-lg rounded-2xl transition"
+          >
+            🎯 GERAR PLANO SEMANAL
+          </button>
+          {plano.length > 0 && (
+            <button
+              onClick={limparPlano}
+              style={buttonCancelStyle}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255, 75, 75, 0.2)'; e.currentTarget.style.borderColor = '#FF4B4B'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(17, 24, 39, 0.7)'; e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.12)'; }}
+            >
+              🗑️ Limpar Plano
+            </button>
+          )}
         </div>
       </Card>
 
-      {diasDaSemana.map((dia, diaIdx) => {
-        const apostasDia = planoActual.combinacoes.filter(c => c.diaSugerido === dia);
-        if (apostasDia.length === 0) return null;
+      {/* Resumo do plano */}
+      {plano.length > 0 && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div style={{ background: 'rgba(17, 24, 39, 0.7)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '12px', padding: '16px', textAlign: 'center' }}>
+            <div style={{ fontSize: '11px', color: '#6B7280', marginBottom: '4px' }}>Total de apostas</div>
+            <div style={{ fontSize: '28px', fontWeight: 800, color: '#F3F4F6' }}>{plano.length}</div>
+            <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px' }}>{principais} principais · {reservas} reserva</div>
+          </div>
+          <div style={{ background: 'rgba(17, 24, 39, 0.7)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '12px', padding: '16px', textAlign: 'center' }}>
+            <div style={{ fontSize: '11px', color: '#6B7280', marginBottom: '4px' }}>Custo total</div>
+            <div style={{ fontSize: '28px', fontWeight: 800, color: '#FF4B4B' }}>
+              {custoTotal.toLocaleString('pt-AO', { style: 'currency', currency: 'AOA' })}
+            </div>
+          </div>
+          <div style={{ background: 'rgba(17, 24, 39, 0.7)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '12px', padding: '16px', textAlign: 'center' }}>
+            <div style={{ fontSize: '11px', color: '#6B7280', marginBottom: '4px' }}>Executadas</div>
+            <div style={{ fontSize: '28px', fontWeight: 800, color: '#00F5A0' }}>{executadas}</div>
+            <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px' }}>{((executadas / plano.length) * 100).toFixed(0)}% concluído</div>
+          </div>
+          <div style={{ background: 'rgba(17, 24, 39, 0.7)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '12px', padding: '16px', textAlign: 'center' }}>
+            <div style={{ fontSize: '11px', color: '#6B7280', marginBottom: '4px' }}>Prémio potencial</div>
+            <div style={{ fontSize: '28px', fontWeight: 800, color: '#FFD700' }}>
+              {(stake * 100000).toLocaleString('pt-AO', { style: 'currency', currency: 'AOA' })}
+            </div>
+            <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px' }}>se 5 acertos</div>
+          </div>
+        </div>
+      )}
+
+      {/* Plano por dia */}
+      {Object.entries(apostasPorDia).map(([data, apostas], idx) => {
+        const dataObj = new Date(data);
+        const diaSemana = diasSemana[dataObj.getDay()];
+        const dataFormatada = dataObj.toLocaleDateString('pt-PT');
+        
+        if (apostas.length === 0) return null;
         
         return (
-          <Card key={dia} title={`📌 ${dia} · ${getDataParaDia(diaIdx)}`} icon={<span>📌</span>}>
-            <div className="space-y-2">
-              {apostasDia.map((aposta) => (
-                <div key={aposta.id} className="flex flex-wrap items-center gap-2 p-2 rounded-lg bg-neutral-50">
-                  <div className="flex gap-0.5">
-                    {aposta.numeros.map((num, numIdx) => (
-                      <Ball key={numIdx} n={num} size="sm" />
-                    ))}
+          <Card key={data} title={`${diaSemana}, ${dataFormatada}`} icon={<span>📆</span>}>
+            <div className="space-y-3">
+              {apostas.map((aposta) => (
+                <div key={aposta.id} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '8px', padding: '12px' }}>
+                  <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className={`px-2 py-1 rounded-full text-xs font-bold ${
+                        aposta.tipo === 'main' 
+                          ? 'bg-blue-100 text-blue-700' 
+                          : 'bg-amber-100 text-amber-700'
+                      }`} style={aposta.tipo === 'main' 
+                        ? { background: 'rgba(59,130,246,0.2)', color: '#60a5fa', borderRadius: '999px', padding: '4px 8px', fontSize: '11px', fontWeight: 700 }
+                        : { background: 'rgba(245,158,11,0.2)', color: '#fbbf24', borderRadius: '999px', padding: '4px 8px', fontSize: '11px', fontWeight: 700 }
+                      }>
+                        {aposta.tipo === 'main' ? '🎯 Principal' : '📌 Reserva'}
+                      </span>
+                      <span style={{ fontSize: '11px', color: '#6B7280' }}>{aposta.estrategia}</span>
+                      <span style={{ fontSize: '11px', color: '#6B7280' }}>{aposta.stake} Kz</span>
+                    </div>
+                    <div className="flex gap-2">
+                      {!aposta.executado && (
+                        <button
+                          onClick={() => marcarExecutado(aposta.id)}
+                          style={{ color: '#00F5A0', fontSize: '11px', fontWeight: 700, background: 'none', border: 'none', cursor: 'pointer' }}
+                        >
+                          ✅ Marcar feito
+                        </button>
+                      )}
+                      <button
+                        onClick={() => iniciarEdicao(aposta)}
+                        style={{ color: '#60a5fa', fontSize: '11px', fontWeight: 700, background: 'none', border: 'none', cursor: 'pointer' }}
+                      >
+                        ✏️ Editar
+                      </button>
+                      <button
+                        onClick={() => eliminarAposta(aposta.id)}
+                        style={{ color: '#FF4B4B', fontSize: '11px', fontWeight: 700, background: 'none', border: 'none', cursor: 'pointer' }}
+                      >
+                        🗑️ Eliminar
+                      </button>
+                    </div>
                   </div>
-                  <div className="text-xs text-neutral-400">
-                    {getMetodoLabel(aposta.metodo).split(' ')[0]}
-                  </div>
+                  
+                  {editandoId === aposta.id ? (
+                    <div>
+                      <div className="flex flex-wrap gap-2 mb-2">
+                        {editandoNumeros.map((num, i) => (
+                          <input
+                            key={i}
+                            type="number"
+                            min={1}
+                            max={90}
+                            value={num || ''}
+                            onChange={(e) => atualizarNumeroEdicao(i, e.target.value)}
+                            style={{ ...inputStyle, width: '60px', textAlign: 'center' }}
+                          />
+                        ))}
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={salvarEdicao}
+                          style={{ background: '#00F5A0', color: '#0B0F19', padding: '6px 12px', borderRadius: '8px', border: 'none', fontWeight: 700, cursor: 'pointer' }}
+                        >
+                          💾 Salvar
+                        </button>
+                        <button
+                          onClick={() => { setEditandoId(null); setEditandoNumeros([]); }}
+                          style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', padding: '6px 12px', borderRadius: '8px', border: 'none', fontWeight: 700, cursor: 'pointer' }}
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap items-center gap-2">
+                      {aposta.numeros.map((num, i) => (
+                        <Ball key={i} n={num} size="sm" />
+                      ))}
+                      {aposta.executado && (
+                        <span style={{ color: '#00F5A0', fontSize: '11px', fontWeight: 700, marginLeft: '8px' }}>✓ Executado</span>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
           </Card>
         );
       })}
+
+      {plano.length === 0 && (
+        <Card title="📋 Plano Semanal" icon={<span>📋</span>}>
+          <div style={{ textAlign: 'center', padding: '32px 0' }}>
+            <div style={{ fontSize: '48px', marginBottom: '12px' }}>📅</div>
+            <p style={{ color: '#F3F4F6', fontWeight: 600, marginBottom: '4px' }}>Nenhum plano gerado</p>
+            <p style={{ color: '#6B7280', fontSize: '14px' }}>Configura as opções acima e gera o teu plano semanal</p>
+          </div>
+        </Card>
+      )}
     </div>
   );
 };

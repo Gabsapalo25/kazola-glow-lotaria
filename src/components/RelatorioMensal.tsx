@@ -54,6 +54,42 @@ const getDataParaDia = (diaIndex: number): string => {
   return targetDate.toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit' });
 };
 
+// Estilos inline para o tema
+const glassCardStyle = {
+  background: 'rgba(17, 24, 39, 0.7)',
+  backdropFilter: 'blur(12px)',
+  border: '1px solid rgba(255, 255, 255, 0.08)',
+  borderRadius: '16px',
+  padding: '16px'
+};
+
+const metricCardStyle = {
+  background: 'rgba(17, 24, 39, 0.7)',
+  backdropFilter: 'blur(12px)',
+  border: '1px solid rgba(255, 255, 255, 0.08)',
+  borderRadius: '16px',
+  padding: '16px',
+  textAlign: 'center' as const
+};
+
+const buttonStyle = {
+  padding: '8px 16px',
+  borderRadius: '12px',
+  background: 'rgba(255, 255, 255, 0.08)',
+  border: '1px solid rgba(255, 255, 255, 0.12)',
+  fontWeight: 700,
+  fontSize: '14px',
+  cursor: 'pointer',
+  transition: 'all 0.2s ease',
+  color: '#E5E7EB'
+};
+
+const buttonDisabledStyle = {
+  ...buttonStyle,
+  opacity: 0.4,
+  cursor: 'not-allowed'
+};
+
 const RelatorioMensal: React.FC<RelatorioMensalProps> = ({ session }) => {
   const [anoActual, setAnoActual] = useState<number>(new Date().getFullYear());
   const [mesActual, setMesActual] = useState<number>(new Date().getMonth());
@@ -285,21 +321,22 @@ const RelatorioMensal: React.FC<RelatorioMensalProps> = ({ session }) => {
     return (
       <Card title="📊 Relatório Mensal" icon={<span>📊</span>}>
         <div className="flex items-center justify-between mb-6">
-          <button onClick={() => navegarMes('anterior')} 
-            className="px-4 py-2 rounded-xl bg-neutral-100 hover:bg-neutral-200 font-bold text-sm transition">
+          <button onClick={() => navegarMes('anterior')} style={buttonStyle}>
             ← Anterior
           </button>
-          <span className="font-display font-black text-lg">{meses[mesActual]} {anoActual}</span>
-          <button onClick={() => navegarMes('proximo')} 
+          <span style={{ fontWeight: 900, fontSize: '20px', color: '#F3F4F6' }}>{meses[mesActual]} {anoActual}</span>
+          <button 
+            onClick={() => navegarMes('proximo')} 
             disabled={anoActual === new Date().getFullYear() && mesActual === new Date().getMonth()}
-            className="px-4 py-2 rounded-xl bg-neutral-100 hover:bg-neutral-200 disabled:opacity-40 font-bold text-sm transition">
+            style={anoActual === new Date().getFullYear() && mesActual === new Date().getMonth() ? buttonDisabledStyle : buttonStyle}
+          >
             Seguinte →
           </button>
         </div>
-        <div className="text-center py-10">
-          <div className="text-5xl mb-3">📊</div>
-          <p className="font-bold text-lg">Sem dados para este mês</p>
-          <p className="text-neutral-500 text-sm mt-1">
+        <div style={{ textAlign: 'center', padding: '40px 0' }}>
+          <div style={{ fontSize: '48px', marginBottom: '12px' }}>📊</div>
+          <p style={{ fontWeight: 700, fontSize: '18px', color: '#F3F4F6', marginBottom: '4px' }}>Sem dados para este mês</p>
+          <p style={{ color: '#6B7280', fontSize: '14px', marginTop: '4px' }}>
             Regista as tuas apostas no Diário para veres o relatório.
           </p>
         </div>
@@ -314,17 +351,14 @@ const RelatorioMensal: React.FC<RelatorioMensalProps> = ({ session }) => {
     <div className="space-y-6">
       {/* Navegação do mês */}
       <div className="flex items-center justify-between">
-        <button
-          onClick={() => navegarMes('anterior')}
-          className="px-4 py-2 rounded-xl bg-neutral-100 hover:bg-neutral-200 font-bold text-sm transition"
-        >
+        <button onClick={() => navegarMes('anterior')} style={buttonStyle}>
           ← Anterior
         </button>
-        <span className="font-display font-black text-xl">{meses[mesActual]} {anoActual}</span>
+        <span style={{ fontWeight: 900, fontSize: '24px', color: '#F3F4F6' }}>{meses[mesActual]} {anoActual}</span>
         <button
           onClick={() => navegarMes('proximo')}
           disabled={anoActual === new Date().getFullYear() && mesActual === new Date().getMonth()}
-          className="px-4 py-2 rounded-xl bg-neutral-100 hover:bg-neutral-200 disabled:opacity-40 font-bold text-sm transition"
+          style={anoActual === new Date().getFullYear() && mesActual === new Date().getMonth() ? buttonDisabledStyle : buttonStyle}
         >
           Seguinte →
         </button>
@@ -332,37 +366,42 @@ const RelatorioMensal: React.FC<RelatorioMensalProps> = ({ session }) => {
 
       {/* Cards de resumo principais */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-white rounded-2xl ring-1 ring-neutral-200 p-4 text-center">
-          <div className="text-xs text-neutral-500 uppercase tracking-wide mb-1">Total gasto</div>
-          <div className="text-2xl font-display font-black text-red-600">{fmtKz(metricas.totalGasto)}</div>
+        <div style={metricCardStyle}>
+          <div style={{ fontSize: '11px', color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>Total gasto</div>
+          <div style={{ fontSize: '28px', fontWeight: 800, color: '#FF4B4B' }}>{fmtKz(metricas.totalGasto)}</div>
         </div>
-        <div className="bg-white rounded-2xl ring-1 ring-neutral-200 p-4 text-center">
-          <div className="text-xs text-neutral-500 uppercase tracking-wide mb-1">Total recuperado</div>
-          <div className="text-2xl font-display font-black text-green-600">{fmtKz(metricas.totalRecuperado)}</div>
+        <div style={metricCardStyle}>
+          <div style={{ fontSize: '11px', color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>Total recuperado</div>
+          <div style={{ fontSize: '28px', fontWeight: 800, color: '#00F5A0' }}>{fmtKz(metricas.totalRecuperado)}</div>
         </div>
-        <div className="bg-white rounded-2xl ring-1 ring-neutral-200 p-4 text-center">
-          <div className="text-xs text-neutral-500 uppercase tracking-wide mb-1">Saldo líquido</div>
-          <div className={`text-2xl font-display font-black ${metricas.saldoLiquido >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+        <div style={metricCardStyle}>
+          <div style={{ fontSize: '11px', color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>Saldo líquido</div>
+          <div style={{ fontSize: '28px', fontWeight: 800, color: metricas.saldoLiquido >= 0 ? '#00F5A0' : '#FF4B4B' }}>
             {fmtKz(metricas.saldoLiquido)}
           </div>
         </div>
-        <div className="bg-white rounded-2xl ring-1 ring-neutral-200 p-4 text-center">
-          <div className="text-xs text-neutral-500 uppercase tracking-wide mb-1">Taxa de retorno</div>
-          <div className="text-2xl font-display font-black text-blue-600">{metricas.taxaRetorno.toFixed(1)}%</div>
+        <div style={metricCardStyle}>
+          <div style={{ fontSize: '11px', color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>Taxa de retorno</div>
+          <div style={{ fontSize: '28px', fontWeight: 800, color: '#FFD700' }}>{metricas.taxaRetorno.toFixed(1)}%</div>
         </div>
       </div>
 
       {/* Gráfico de barras - Gasto por semana */}
       <Card title="📊 Gasto por Semana" icon={<span>📊</span>}>
-        <div className="flex items-end gap-4 h-40">
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: '16px', height: '160px' }}>
           {gastosPorSemana.map((semana) => (
-            <div key={semana.semana} className="flex-1 flex flex-col items-center">
+            <div key={semana.semana} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
               <div
-                className="w-full bg-red-600 rounded-t-lg transition-all"
-                style={{ height: `${Math.max(semana.percentagem, 5)}%` }}
+                style={{
+                  width: '100%',
+                  background: 'linear-gradient(180deg, #00F5A0, #00C896)',
+                  borderRadius: '8px 8px 0 0',
+                  height: `${Math.max(semana.percentagem, 5)}%`,
+                  transition: 'height 0.3s ease'
+                }}
               />
-              <div className="text-xs text-neutral-500 mt-2">Semana {semana.semana}</div>
-              <div className="text-xs font-bold">{fmtKz(semana.valor)}</div>
+              <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '8px' }}>Semana {semana.semana}</div>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: '#F3F4F6' }}>{fmtKz(semana.valor)}</div>
             </div>
           ))}
         </div>
@@ -372,19 +411,27 @@ const RelatorioMensal: React.FC<RelatorioMensalProps> = ({ session }) => {
       <Card title="🎯 Distribuição de Acertos" icon={<span>🎯</span>}>
         <div className="space-y-3">
           {distribuicaoAcertos.map((item) => (
-            <div key={item.acertos} className="flex items-center gap-4">
-              <div className="w-20 text-sm font-bold text-neutral-700">{item.acertos}</div>
-              <div className="flex-1 h-6 bg-neutral-100 rounded-full overflow-hidden">
+            <div key={item.acertos} style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+              <div style={{ width: '80px', fontSize: '14px', fontWeight: 700, color: '#9CA3AF' }}>{item.acertos}</div>
+              <div style={{ flex: 1, height: '24px', background: 'rgba(255, 255, 255, 0.05)', borderRadius: '999px', overflow: 'hidden' }}>
                 <div
-                  className="h-full bg-red-600 rounded-full flex items-center justify-end px-2 transition-all"
-                  style={{ width: `${Math.max(item.percentagem, item.count > 0 ? 8 : 0)}%` }}
+                  style={{
+                    height: '100%',
+                    background: 'linear-gradient(90deg, #00F5A0, #FFD700)',
+                    borderRadius: '999px',
+                    width: `${Math.max(item.percentagem, item.count > 0 ? 8 : 0)}%`,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'flex-end',
+                    paddingRight: '8px'
+                  }}
                 >
                   {item.percentagem > 15 && (
-                    <span className="text-xs font-bold text-white">{item.percentagem.toFixed(0)}%</span>
+                    <span style={{ fontSize: '11px', fontWeight: 700, color: '#0B0F19' }}>{item.percentagem.toFixed(0)}%</span>
                   )}
                 </div>
               </div>
-              <div className="w-20 text-right text-sm text-neutral-600">
+              <div style={{ width: '80px', textAlign: 'right', fontSize: '13px', color: '#6B7280' }}>
                 {item.count} ({item.percentagem.toFixed(0)}%)
               </div>
             </div>
@@ -394,21 +441,21 @@ const RelatorioMensal: React.FC<RelatorioMensalProps> = ({ session }) => {
 
       {/* Métricas adicionais */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-white rounded-2xl ring-1 ring-neutral-200 p-4">
-          <div className="text-xs text-neutral-500 mb-1">Custo médio por aposta</div>
-          <div className="text-lg font-display font-black text-neutral-900">{fmtKz(metricas.custoMedioPorAposta)}</div>
+        <div style={metricCardStyle}>
+          <div style={{ fontSize: '11px', color: '#6B7280', marginBottom: '4px' }}>Custo médio por aposta</div>
+          <div style={{ fontSize: '20px', fontWeight: 800, color: '#F3F4F6' }}>{fmtKz(metricas.custoMedioPorAposta)}</div>
         </div>
-        <div className="bg-white rounded-2xl ring-1 ring-neutral-200 p-4">
-          <div className="text-xs text-neutral-500 mb-1">Prémio médio (quando ganha)</div>
-          <div className="text-lg font-display font-black text-green-600">{fmtKz(metricas.premioMedioQuandoGanha)}</div>
+        <div style={metricCardStyle}>
+          <div style={{ fontSize: '11px', color: '#6B7280', marginBottom: '4px' }}>Prémio médio (quando ganha)</div>
+          <div style={{ fontSize: '20px', fontWeight: 800, color: '#00F5A0' }}>{fmtKz(metricas.premioMedioQuandoGanha)}</div>
         </div>
-        <div className="bg-white rounded-2xl ring-1 ring-neutral-200 p-4">
-          <div className="text-xs text-neutral-500 mb-1">Total de apostas</div>
-          <div className="text-lg font-display font-black text-neutral-900">{metricas.totalApostas}</div>
+        <div style={metricCardStyle}>
+          <div style={{ fontSize: '11px', color: '#6B7280', marginBottom: '4px' }}>Total de apostas</div>
+          <div style={{ fontSize: '20px', fontWeight: 800, color: '#F3F4F6' }}>{metricas.totalApostas}</div>
         </div>
-        <div className="bg-white rounded-2xl ring-1 ring-neutral-200 p-4">
-          <div className="text-xs text-neutral-500 mb-1">Melhor resultado</div>
-          <div className="text-lg font-display font-black text-amber-600">{metricas.melhorResultado} acertos</div>
+        <div style={metricCardStyle}>
+          <div style={{ fontSize: '11px', color: '#6B7280', marginBottom: '4px' }}>Melhor resultado</div>
+          <div style={{ fontSize: '20px', fontWeight: 800, color: '#FFD700' }}>{metricas.melhorResultado} acertos</div>
         </div>
       </div>
 
@@ -416,21 +463,21 @@ const RelatorioMensal: React.FC<RelatorioMensalProps> = ({ session }) => {
       {comparacaoMesAnterior && (
         <Card title="📈 Comparação com mês anterior" icon={<span>📈</span>}>
           <div className="grid grid-cols-3 gap-4">
-            <div className="text-center">
-              <div className="text-xs text-neutral-500 mb-1">Variação do gasto</div>
-              <div className={`font-display font-black text-lg ${comparacaoMesAnterior.variacaoGasto <= 0 ? 'text-green-600' : 'text-red-600'}`}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '11px', color: '#6B7280', marginBottom: '4px' }}>Variação do gasto</div>
+              <div style={{ fontWeight: 900, fontSize: '18px', color: comparacaoMesAnterior.variacaoGasto <= 0 ? '#00F5A0' : '#FF4B4B' }}>
                 {comparacaoMesAnterior.variacaoGasto > 0 ? '+' : ''}{comparacaoMesAnterior.variacaoGasto.toFixed(1)}%
               </div>
             </div>
-            <div className="text-center">
-              <div className="text-xs text-neutral-500 mb-1">Variação do retorno</div>
-              <div className={`font-display font-black text-lg ${comparacaoMesAnterior.variacaoRetorno >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '11px', color: '#6B7280', marginBottom: '4px' }}>Variação do retorno</div>
+              <div style={{ fontWeight: 900, fontSize: '18px', color: comparacaoMesAnterior.variacaoRetorno >= 0 ? '#00F5A0' : '#FF4B4B' }}>
                 {comparacaoMesAnterior.variacaoRetorno > 0 ? '+' : ''}{comparacaoMesAnterior.variacaoRetorno.toFixed(1)}%
               </div>
             </div>
-            <div className="text-center">
-              <div className="text-xs text-neutral-500 mb-1">Variação da taxa de acerto</div>
-              <div className={`font-display font-black text-lg ${comparacaoMesAnterior.variacaoTaxaAcerto >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '11px', color: '#6B7280', marginBottom: '4px' }}>Variação da taxa de acerto</div>
+              <div style={{ fontWeight: 900, fontSize: '18px', color: comparacaoMesAnterior.variacaoTaxaAcerto >= 0 ? '#00F5A0' : '#FF4B4B' }}>
                 {comparacaoMesAnterior.variacaoTaxaAcerto > 0 ? '+' : ''}{comparacaoMesAnterior.variacaoTaxaAcerto.toFixed(1)} p.p.
               </div>
             </div>
@@ -443,7 +490,7 @@ const RelatorioMensal: React.FC<RelatorioMensalProps> = ({ session }) => {
         <Card title="💡 Observações Inteligentes" icon={<span>💡</span>}>
           <div className="space-y-2">
             {observacoes.map((obs, idx) => (
-              <p key={idx} className="text-sm text-neutral-700">{obs}</p>
+              <p key={idx} style={{ fontSize: '14px', color: '#9CA3AF', lineHeight: 1.5 }}>{obs}</p>
             ))}
           </div>
         </Card>

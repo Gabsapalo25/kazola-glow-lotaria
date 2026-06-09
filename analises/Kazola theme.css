@@ -1,0 +1,342 @@
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800;900&family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ══════════════════════════════════════════
+   TOKENS DE DESIGN — TEMA DARK PREMIUM
+   ══════════════════════════════════════════ */
+:root {
+  /* Cores base */
+  --bg-base:        #0B0F19;
+  --bg-surface:     #111827;
+  --bg-surface2:    #1F2937;
+  --border:         rgba(255, 255, 255, 0.08);
+  --border-hover:   rgba(255, 255, 255, 0.16);
+
+  /* Texto */
+  --text:           #E5E7EB;
+  --text-muted:     #9CA3AF;
+  --text-faint:     #6B7280;
+
+  /* Acento principal — verde neon */
+  --green:          #00F5A0;
+  --green-dark:     #00C896;
+  --green-glow:     rgba(0, 245, 160, 0.25);
+
+  /* Acento secundário — dourado */
+  --gold:           #FFD700;
+  --gold-dark:      #B8860B;
+  --gold-glow:      rgba(255, 215, 0, 0.25);
+
+  /* Vermelho */
+  --red:            #FF4B4B;
+  --red-dark:       #DC2626;
+
+  /* Azul */
+  --blue:           #60A5FA;
+
+  /* Tipografia */
+  --font-display:   'Sora', sans-serif;
+  --font-body:      'DM Sans', sans-serif;
+  --font-mono:      'JetBrains Mono', monospace;
+
+  /* Legado — mantidos para componentes antigos */
+  --surface:        var(--bg-surface);
+  --surface2:       var(--bg-surface2);
+  --gold-light:     rgba(255, 215, 0, 0.08);
+  --text-muted-old: var(--text-muted);
+}
+
+/* ══════════════════════════════════════════
+   RESET BASE
+   ══════════════════════════════════════════ */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--bg-base);
+  color: var(--text);
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--font-display);
+}
+
+/* ══════════════════════════════════════════
+   SCROLLBAR PREMIUM
+   ══════════════════════════════════════════ */
+::-webkit-scrollbar       { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.03); border-radius: 10px; }
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(135deg, var(--green), var(--green-dark));
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(135deg, var(--gold), #FFA500);
+}
+
+/* ══════════════════════════════════════════
+   ACESSIBILIDADE
+   ══════════════════════════════════════════ */
+:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* ══════════════════════════════════════════
+   ALTO CONTRASTE
+   ══════════════════════════════════════════ */
+.high-contrast {
+  --bg-base:     #000000 !important;
+  --bg-surface:  #0a0a0a !important;
+  --bg-surface2: #111111 !important;
+  --border:      rgba(255, 255, 255, 0.4) !important;
+  --text:        #ffffff !important;
+  --text-muted:  #cccccc !important;
+  --text-faint:  #aaaaaa !important;
+}
+.high-contrast .bg-white            { background: #111 !important; }
+.high-contrast .text-neutral-600,
+.high-contrast .text-neutral-700    { color: #ddd !important; }
+.high-contrast .ring-neutral-200    { --tw-ring-color: #555 !important; }
+.high-contrast .border-neutral-200  { border-color: rgba(255,255,255,0.3) !important; }
+
+/* ══════════════════════════════════════════
+   MODO ESCURO — override Tailwind
+   ══════════════════════════════════════════ */
+.dark-mode .bg-white            { background-color: #111827 !important; color: #E5E7EB !important; }
+.dark-mode .bg-neutral-50,
+.dark-mode .bg-neutral-100      { background-color: #1F2937 !important; }
+.dark-mode .text-neutral-600,
+.dark-mode .text-neutral-700    { color: #9CA3AF !important; }
+.dark-mode .ring-neutral-200    { border-color: rgba(255,255,255,0.1) !important; }
+.dark-mode .border-neutral-200  { border-color: rgba(255,255,255,0.1) !important; }
+
+/* ══════════════════════════════════════════
+   TAMANHOS DE FONTE
+   ══════════════════════════════════════════ */
+.font-sys-normal { font-size: 16px; }
+.font-sys-large  { font-size: 18px; }
+.font-sys-xlarge { font-size: 21px; }
+
+/* ══════════════════════════════════════════
+   TIPOGRAFIA
+   ══════════════════════════════════════════ */
+.font-display { font-family: var(--font-display); }
+.font-mono    { font-family: var(--font-mono); }
+
+/* ══════════════════════════════════════════
+   GLASS CARD — componente reutilizável
+   ══════════════════════════════════════════ */
+.glass-card {
+  background:    rgba(17, 24, 39, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border:        1px solid var(--border);
+  border-radius: 20px;
+  transition:    border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.glass-card:hover {
+  border-color: var(--border-hover);
+}
+
+/* ══════════════════════════════════════════
+   HOVER LIFT
+   ══════════════════════════════════════════ */
+.hover-lift {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.hover-lift:hover {
+  transform:  translateY(-2px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+/* ══════════════════════════════════════════
+   BADGES DE STATUS (HistoryRowV2)
+   ══════════════════════════════════════════ */
+.badge-pending {
+  display:       inline-flex;
+  align-items:   center;
+  gap:           4px;
+  padding:       3px 10px;
+  border-radius: 20px;
+  font-size:     0.7rem;
+  font-weight:   700;
+  background:    rgba(255, 215, 0, 0.12);
+  border:        1px solid rgba(255, 215, 0, 0.35);
+  color:         var(--gold);
+}
+.badge-verified {
+  display:       inline-flex;
+  align-items:   center;
+  gap:           4px;
+  padding:       3px 10px;
+  border-radius: 20px;
+  font-size:     0.7rem;
+  font-weight:   700;
+  background:    rgba(0, 245, 160, 0.12);
+  border:        1px solid rgba(0, 245, 160, 0.35);
+  color:         var(--green);
+}
+.badge-prize {
+  display:       inline-flex;
+  align-items:   center;
+  gap:           4px;
+  padding:       3px 10px;
+  border-radius: 20px;
+  font-size:     0.7rem;
+  font-weight:   700;
+  background:    linear-gradient(135deg, rgba(255,215,0,0.2), rgba(255,140,0,0.1));
+  border:        1px solid rgba(255, 215, 0, 0.5);
+  color:         var(--gold);
+  animation:     pulseBadge 2s ease infinite;
+}
+
+/* ══════════════════════════════════════════
+   TABELA DO HISTÓRICO
+   ══════════════════════════════════════════ */
+.draw-row:hover td  { background: rgba(255, 215, 0, 0.04); }
+.draw-row.active td {
+  background:   rgba(255, 215, 0, 0.07);
+  border-left:  3px solid var(--gold);
+}
+
+/* ══════════════════════════════════════════
+   ANIMAÇÕES
+   ══════════════════════════════════════════ */
+
+/* Entrada de bola */
+@keyframes ballDrop {
+  0%   { transform: translateY(-24px) scale(0.6); opacity: 0; }
+  65%  { transform: translateY(5px) scale(1.08);  opacity: 1; }
+  100% { transform: translateY(0) scale(1);        opacity: 1; }
+}
+
+/* Crescimento de barra */
+@keyframes barGrow {
+  from { width: 0 !important; }
+}
+
+/* Fade in com subida */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Fade in com subida — versão nomeada para App.tsx */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Rotação única */
+@keyframes spinOnce {
+  0%   { transform: rotate(0deg) scale(0.9); }
+  100% { transform: rotate(360deg) scale(1); }
+}
+
+/* Pulso suave vermelho (legado) */
+@keyframes pulseSoft {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(204, 0, 0, 0.25); }
+  50%       { box-shadow: 0 0 0 10px rgba(204, 0, 0, 0); }
+}
+
+/* Pulso verde */
+@keyframes pulse-green {
+  0%, 100% { transform: scale(1);   opacity: 1; }
+  50%       { transform: scale(1.5); opacity: 0.5; }
+}
+
+/* Pulso badge dourado */
+@keyframes pulseBadge {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 215, 0, 0.4); }
+  50%       { box-shadow: 0 0 0 6px rgba(255, 215, 0, 0); }
+}
+
+/* Gradiente animado de fundo */
+@keyframes gradientShift {
+  0%, 100% { opacity: 0.3; transform: translate(-10%, -10%) scale(1); }
+  50%       { opacity: 0.6; transform: translate(10%, 10%) scale(1.2); }
+}
+
+/* Shimmer — brilho deslizante */
+@keyframes shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position:  200% center; }
+}
+
+/* Flash de actualização */
+@keyframes updateFlash {
+  0%   { background: rgba(0, 245, 160, 0.15); }
+  100% { background: transparent; }
+}
+
+/* Confete / partícula */
+@keyframes floatParticle {
+  0%   { transform: translateY(0) scale(0); opacity: 1; }
+  100% { transform: translateY(-60px) scale(1); opacity: 0; }
+}
+
+/* Vitória de slot */
+@keyframes slotWin {
+  0%   { transform: scale(1);    filter: brightness(1); }
+  30%  { transform: scale(1.2);  filter: brightness(1.5); }
+  70%  { transform: scale(0.95); filter: brightness(1.2); }
+  100% { transform: scale(1);    filter: brightness(1); }
+}
+
+/* ══════════════════════════════════════════
+   CLASSES DE ANIMAÇÃO
+   ══════════════════════════════════════════ */
+.ball-drop    { animation: ballDrop    0.5s cubic-bezier(.22,.68,0,1.2) both; }
+.bar-grow     { animation: barGrow     0.8s ease both; }
+.pulse-soft   { animation: pulseSoft   2.5s ease infinite; }
+.fade-in      { animation: fadeIn      0.4s ease both; }
+.fade-in-up   { animation: fadeInUp    0.5s ease both; }
+.spin-once    { animation: spinOnce    0.6s ease both; }
+.pulse-green  { animation: pulse-green 2s ease-in-out infinite; }
+.update-flash { animation: updateFlash 1s ease both; }
+
+/* ══════════════════════════════════════════
+   PARTÍCULA DE VITÓRIA
+   ══════════════════════════════════════════ */
+.ball-particle {
+  position:        fixed;
+  width:           8px;
+  height:          8px;
+  background:      radial-gradient(circle, #ffd700, #ff8c00);
+  border-radius:   50%;
+  pointer-events:  none;
+  animation:       floatParticle 1s ease-out forwards;
+  z-index:         9999;
+}
+
+/* ══════════════════════════════════════════
+   GRADIENTE DE TEXTO (helper)
+   ══════════════════════════════════════════ */
+.text-gradient-green {
+  background-image:        linear-gradient(135deg, #ffffff, #00F5A0);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip:         text;
+}
+.text-gradient-gold {
+  background-image:        linear-gradient(135deg, #ffffff, #FFD700);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip:         text;
+}
+.text-gradient-red {
+  background-image:        linear-gradient(135deg, #ffffff, #FF4B4B);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip:         text;
+}

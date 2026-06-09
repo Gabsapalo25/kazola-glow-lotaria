@@ -1,10 +1,10 @@
-// src/components/DiarioApostas.tsx
 import React, { useState, useEffect, useMemo } from 'react';
-import Ball from './Ball';
+import ChromeBall from './ChromeBall';
 import Card from './Card';
 import Modal from './Modal';
 import { UserSession, shouldSync, updateLastSync } from '../lib/session';
 import { saveUserData, loadUserData, deleteUserData } from '../lib/apiClient';
+import { savePerformanceDetalhada } from '../lib/validation';
 
 interface RegistoAposta {
   id: string;
@@ -19,9 +19,18 @@ interface RegistoAposta {
   notas: string;
 }
 
+interface Draw {
+  id: string;
+  date: string;
+  time?: string;
+  numbers: number[];
+  session?: string;
+}
+
 interface DiarioApostasProps {
   session: UserSession;
   onSessionUpdate?: (session: UserSession) => void;
+  draws?: Draw[];
 }
 
 const getStorageKey = (email: string) => `kazola_diario_${email}`;
@@ -29,7 +38,7 @@ const getStorageKey = (email: string) => `kazola_diario_${email}`;
 const fmtKz = (value: number) =>
   value.toLocaleString('pt-AO', { style: 'currency', currency: 'AOA' });
 
-const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate }) => {
+const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate, draws = [] }) => {
   const [registos, setRegistos] = useState<RegistoAposta[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [formData, setFormData] = useState({
@@ -45,26 +54,23 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate 
   const [premioTemp, setPremioTemp] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [conferindoAuto, setConferindoAuto] = useState<string | null>(null);
 
-  // ==================== SINCRONIZAÇÃO COM O SERVIDOR ====================
-
-  // Carregar registos do servidor (cross-device) + localStorage (cache)
   const loadFromServer = async () => {
     if (!shouldSync(session)) return;
-    
+
     setSyncing(true);
     setSyncError(null);
-    
+
     try {
       const result = await loadUserData(session.email, 'diario');
-      
+
       if (result.ok && result.records) {
         const serverRegistos: RegistoAposta[] = [];
-        
+
         for (const record of result.records) {
           try {
             const parsedData = JSON.parse(record.data);
-            // Verifica se tem a estrutura de RegistoAposta
             if (parsedData.id && parsedData.combinacao) {
               serverRegistos.push(parsedData as RegistoAposta);
             }
@@ -72,8 +78,7 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate 
             console.error('Erro ao fazer parse de registo do servidor:', e);
           }
         }
-        
-        // Carrega registos locais
+
         const localKey = getStorageKey(session.email);
         const localStored = localStorage.getItem(localKey);
         let localRegistos: RegistoAposta[] = [];
@@ -82,35 +87,20 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate 
             localRegistos = JSON.parse(localStored);
           } catch { /* ignore */ }
         }
-        
-        // MERGE: servidor prevalece (timestamp mais recente)
-        // Cria um mapa de registos por id
+
         const mergedMap = new Map<string, RegistoAposta>();
-        
-        // Primeiro adiciona os do servidor
-        for (const r of serverRegistos) {
-          mergedMap.set(r.id, r);
-        }
-        
-        // Depois adiciona os locais (se não existirem no servidor)
+        for (const r of serverRegistos) mergedMap.set(r.id, r);
         for (const r of localRegistos) {
-          if (!mergedMap.has(r.id)) {
-            mergedMap.set(r.id, r);
-          }
+          if (!mergedMap.has(r.id)) mergedMap.set(r.id, r);
         }
-        
+
         const mergedRegistos = Array.from(mergedMap.values())
           .sort((a, b) => b.data.localeCompare(a.data) || b.hora.localeCompare(a.hora));
-        
+
         setRegistos(mergedRegistos);
-        
-        // Guarda merge no localStorage
         localStorage.setItem(localKey, JSON.stringify(mergedRegistos));
-        
-        // Actualiza timestamp de sync
-        if (onSessionUpdate) {
-          onSessionUpdate(updateLastSync(session));
-        }
+
+        if (onSessionUpdate) onSessionUpdate(updateLastSync(session));
       }
     } catch (error) {
       console.error('Erro ao carregar do servidor:', error);
@@ -120,44 +110,28 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate 
     }
   };
 
-  // Guardar registos no localStorage + servidor (se sync activo)
   const saveRegistos = async (newRegistos: RegistoAposta[]) => {
-    // 1. Guarda no localStorage (cache)
     localStorage.setItem(getStorageKey(session.email), JSON.stringify(newRegistos));
     setRegistos(newRegistos);
-    
-    // 2. Sincroniza com o servidor (se activo)
+
     if (shouldSync(session)) {
       for (const registo of newRegistos) {
         try {
-          await saveUserData(
-            session.email,
-            'diario',
-            registo.id,
-            JSON.stringify(registo)
-          );
+          await saveUserData(session.email, 'diario', registo.id, JSON.stringify(registo));
         } catch (error) {
           console.error('Erro ao sincronizar registo:', registo.id, error);
           setSyncError('Erro ao sincronizar. Os dados estão guardados localmente.');
         }
       }
-      
-      // Actualiza timestamp de sync
-      if (onSessionUpdate) {
-        onSessionUpdate(updateLastSync(session));
-      }
+      if (onSessionUpdate) onSessionUpdate(updateLastSync(session));
     }
   };
 
-  // Eliminar registo (local + servidor)
   const deleteRegisto = async (id: string) => {
     const filtered = registos.filter(r => r.id !== id);
-    
-    // 1. Actualiza localStorage
     localStorage.setItem(getStorageKey(session.email), JSON.stringify(filtered));
     setRegistos(filtered);
-    
-    // 2. Elimina do servidor (se sync activo)
+
     if (shouldSync(session)) {
       try {
         await deleteUserData(session.email, id, 'diario');
@@ -168,37 +142,28 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate 
     }
   };
 
-  // Carregar registos do localStorage (fallback rápido)
   useEffect(() => {
     const key = getStorageKey(session.email);
     const stored = localStorage.getItem(key);
     if (stored) {
-      try { 
-        setRegistos(JSON.parse(stored)); 
-      } catch { 
-        /* ignore */ 
-      }
+      try { setRegistos(JSON.parse(stored)); } catch { /* ignore */ }
     }
-    
-    // Carrega do servidor em background (cross-device)
     loadFromServer();
   }, [session.email]);
 
-  // Gerar ID único
   const generateId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-  // Submeter novo registo
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setSyncError(null);
-    
+
     const numeros = formData.combinacao.map(n => parseInt(n));
-    
+
     if (numeros.some(isNaN)) return setError('Preencha os 5 números da combinação');
     if (numeros.some(n => n < 1 || n > 90)) return setError('Os números devem estar entre 1 e 90');
     if (new Set(numeros).size !== 5) return setError('Os números não podem repetir-se');
-    if (formData.valorApostado < 50 || formData.valorApostado > 1000) 
+    if (formData.valorApostado < 50 || formData.valorApostado > 1000)
       return setError('O valor apostado deve estar entre 50 e 1000 Kz');
 
     const novoRegisto: RegistoAposta = {
@@ -215,8 +180,7 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate 
     };
 
     await saveRegistos([novoRegisto, ...registos]);
-    
-    // Reset form
+
     setFormData({
       data: new Date().toISOString().split('T')[0],
       hora: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
@@ -227,7 +191,6 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate 
     });
   };
 
-  // Verificar aposta
   const handleVerificar = (id: string) => {
     const registo = registos.find(r => r.id === id);
     if (registo) {
@@ -239,158 +202,222 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate 
 
   const confirmarVerificacao = async () => {
     if (!verificandoId) return;
-    
+
     const updatedRegistos = registos.map(r =>
       r.id === verificandoId
-        ? { 
-            ...r, 
-            resultado: 'verificado' as const, 
-            acertos: acertosTemp, 
-            premioRecebido: premioTemp 
-          }
+        ? { ...r, resultado: 'verificado' as const, acertos: acertosTemp, premioRecebido: premioTemp }
         : r
     );
-    
+
     await saveRegistos(updatedRegistos);
-    
     setVerificandoId(null);
     setAcertosTemp(0);
     setPremioTemp(0);
   };
 
-  // Eliminar aposta
+  const conferirAutomaticamente = async (registo: RegistoAposta) => {
+    if (draws.length === 0) {
+      alert('⚠️ Sem dados de sorteios para conferir. Aguarde a actualização da API.');
+      return;
+    }
+
+    setConferindoAuto(registo.id);
+
+    try {
+      const dataAposta = new Date(registo.data).toLocaleDateString('pt-AO');
+
+      const sorteioCorrespondente = draws.find(draw => {
+        const dataDraw = new Date(draw.date).toLocaleDateString('pt-AO');
+        const mesmaData = dataAposta === dataDraw;
+        const sessaoAposta = registo.sessao.toLowerCase();
+        const sessaoDraw = draw.session?.toLowerCase() || '';
+        const mesmaSessao =
+          sessaoAposta === sessaoDraw ||
+          (sessaoAposta === 'fezada'  && sessaoDraw === 'fezada')  ||
+          (sessaoAposta === 'kazola'  && sessaoDraw === 'kazola')  ||
+          (sessaoAposta === 'eskebra' && sessaoDraw === 'eskebra') ||
+          (sessaoAposta === 'aqueceu' && sessaoDraw === 'aqueceu');
+        return mesmaData && mesmaSessao;
+      });
+
+      if (!sorteioCorrespondente) {
+        alert(`⚠️ Nenhum sorteio encontrado para ${registo.data} (${registo.sessao}).\nVerifique se o resultado já foi divulgado ou tente conferir manualmente.`);
+        setConferindoAuto(null);
+        return;
+      }
+
+      const acertos = registo.combinacao.filter(n => sorteioCorrespondente.numbers.includes(n)).length;
+      const multipliers: Record<number, number> = { 2: 10, 3: 120, 4: 5000, 5: 100000 };
+      const premio = acertos >= 2 ? registo.valorApostado * (multipliers[acertos as keyof typeof multipliers] || 0) : 0;
+      const numerosSorteados = sorteioCorrespondente.numbers.join(', ');
+
+      if (acertos >= 2) {
+        alert(`🎉 PARABÉNS! ${acertos} acerto${acertos > 1 ? 's' : ''}!\n\n📊 Números sorteados: ${numerosSorteados}\n💰 Prémio estimado: ${fmtKz(premio)}\n\n✅ Deseja confirmar esta verificação?`);
+      } else {
+        alert(`📊 Resultado da conferência:\n• ${acertos} acerto${acertos !== 1 ? 's' : ''}\n• Números sorteados: ${numerosSorteados}\n\n💡 Boa sorte na próxima!`);
+      }
+
+      if (acertos >= 2) {
+        const confirmar = window.confirm(`Deseja registar automaticamente ${acertos} acerto${acertos > 1 ? 's' : ''} e prémio de ${fmtKz(premio)}?`);
+        if (confirmar) {
+          savePerformanceDetalhada('kazola', acertos, 1, sorteioCorrespondente.numbers, registo.valorApostado);
+          const updatedRegistos = registos.map(r =>
+            r.id === registo.id
+              ? { ...r, resultado: 'verificado' as const, acertos, premioRecebido: premio }
+              : r
+          );
+          await saveRegistos(updatedRegistos);
+          alert('✅ Aposta verificada automaticamente com sucesso!');
+        } else {
+          setAcertosTemp(acertos);
+          setPremioTemp(premio);
+          setVerificandoId(registo.id);
+        }
+      } else {
+        setAcertosTemp(acertos);
+        setPremioTemp(premio);
+        setVerificandoId(registo.id);
+      }
+    } catch (error) {
+      console.error('Erro na conferência automática:', error);
+      alert('❌ Erro ao conferir automaticamente. Tente a verificação manual.');
+    } finally {
+      setConferindoAuto(null);
+    }
+  };
+
   const handleEliminar = async (id: string) => {
     if (window.confirm('Tens a certeza que queres eliminar este registo?')) {
       await deleteRegisto(id);
     }
   };
 
-  // Estatísticas do mês actual
   const estatisticas = useMemo(() => {
     const now = new Date();
-    const mesActual = now.getMonth(); // 0-11
+    const mesActual = now.getMonth();
     const anoActual = now.getFullYear();
 
     const registosMes = registos.filter(r => {
-      const [ano, mes] = r.data.split('-').map(Number); // mes vem 1-12
+      const [ano, mes] = r.data.split('-').map(Number);
       return ano === anoActual && (mes - 1) === mesActual;
     });
 
     return {
-      totalGasto: registosMes.reduce((sum, r) => sum + r.valorApostado, 0),
+      totalGasto:      registosMes.reduce((sum, r) => sum + r.valorApostado, 0),
       totalRecuperado: registosMes.reduce((sum, r) => sum + r.premioRecebido, 0),
-      saldo: registosMes.reduce((sum, r) => sum + r.premioRecebido - r.valorApostado, 0),
-      pendentes: registosMes.filter(r => r.resultado === 'pendente').length,
+      saldo:           registosMes.reduce((sum, r) => sum + r.premioRecebido - r.valorApostado, 0),
+      pendentes:       registosMes.filter(r => r.resultado === 'pendente').length,
     };
   }, [registos]);
 
-  // Atualizar campo da combinação
   const updateCombinacao = (index: number, value: string) => {
     const newCombinacao = [...formData.combinacao];
     newCombinacao[index] = value;
     setFormData({ ...formData, combinacao: newCombinacao });
   };
 
+  /* ── Estilos reutilizáveis ── */
+  const glassCardStyle: React.CSSProperties = {
+    background: 'rgba(17, 24, 39, 0.7)',
+    backdropFilter: 'blur(12px)',
+    border: '1px solid rgba(255, 255, 255, 0.08)',
+    borderRadius: '16px',
+    padding: '16px',
+  };
+
+  const inputStyle: React.CSSProperties = {
+    background: 'rgba(0, 0, 0, 0.3)',
+    color: '#F3F4F6',
+    border: '1px solid rgba(255, 255, 255, 0.12)',
+    borderRadius: '10px',
+    padding: '8px 12px',
+    fontSize: '14px',
+    outline: 'none',
+  };
+
+  /* ── Badge de sessão ── */
+  const sessaoConfig: Record<string, { color: string; icon: string }> = {
+    Fezada:  { color: '#FF6B6B', icon: '☀️' },
+    Aqueceu: { color: '#FF9F4A', icon: '🔥' },
+    Kazola:  { color: '#00F5A0', icon: '🌙' },
+    Eskebra: { color: '#A855F7', icon: '⚡' },
+  };
+
   return (
     <div className="space-y-6">
-      {/* Banner de sincronização */}
+
+      {/* ── Banners de estado ── */}
       {syncing && (
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-center text-blue-700 text-sm">
+        <div style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)', borderRadius: '12px', padding: '12px', textAlign: 'center', color: '#60A5FA', fontSize: '14px' }}>
           🔄 A sincronizar com o servidor...
         </div>
       )}
       {syncError && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-center text-amber-700 text-sm">
+        <div style={{ background: 'rgba(255,215,0,0.1)', border: '1px solid rgba(255,215,0,0.2)', borderRadius: '12px', padding: '12px', textAlign: 'center', color: '#FFD700', fontSize: '14px' }}>
           ⚠️ {syncError}
         </div>
       )}
       {shouldSync(session) && !syncing && (
-        <div className="bg-green-50 border border-green-200 rounded-xl p-2 text-center text-green-700 text-xs">
+        <div style={{ background: 'rgba(0,245,160,0.1)', border: '1px solid rgba(0,245,160,0.2)', borderRadius: '12px', padding: '8px', textAlign: 'center', color: '#00F5A0', fontSize: '12px' }}>
           ☁️ Dados sincronizados na nuvem — disponíveis em todos os dispositivos
         </div>
       )}
 
-      {/* Cards de resumo */}
+      {/* ── Cards de estatísticas ── */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-white rounded-2xl ring-1 ring-neutral-200 p-4 text-center">
-          <div className="text-xs text-neutral-500 uppercase tracking-wide mb-1">Total gasto este mês</div>
-          <div className="text-2xl font-display font-black text-red-600">{fmtKz(estatisticas.totalGasto)}</div>
-        </div>
-        <div className="bg-white rounded-2xl ring-1 ring-neutral-200 p-4 text-center">
-          <div className="text-xs text-neutral-500 uppercase tracking-wide mb-1">Total recuperado</div>
-          <div className="text-2xl font-display font-black text-green-600">{fmtKz(estatisticas.totalRecuperado)}</div>
-        </div>
-        <div className="bg-white rounded-2xl ring-1 ring-neutral-200 p-4 text-center">
-          <div className="text-xs text-neutral-500 uppercase tracking-wide mb-1">Saldo do mês</div>
-          <div className={`text-2xl font-display font-black ${estatisticas.saldo >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-            {fmtKz(estatisticas.saldo)}
+        {[
+          { label: 'Total gasto este mês',   value: fmtKz(estatisticas.totalGasto),      color: '#FF4B4B' },
+          { label: 'Total recuperado',        value: fmtKz(estatisticas.totalRecuperado), color: '#00F5A0' },
+          { label: 'Saldo do mês',            value: fmtKz(estatisticas.saldo),           color: estatisticas.saldo >= 0 ? '#00F5A0' : '#FF4B4B' },
+          { label: 'Aguardam verificação',    value: String(estatisticas.pendentes),       color: '#FFD700' },
+        ].map(({ label, value, color }) => (
+          <div key={label} style={glassCardStyle}>
+            <div style={{ fontSize: '11px', color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>{label}</div>
+            <div style={{ fontSize: '28px', fontWeight: 800, color }}>{value}</div>
           </div>
-        </div>
-        <div className="bg-white rounded-2xl ring-1 ring-neutral-200 p-4 text-center">
-          <div className="text-xs text-neutral-500 uppercase tracking-wide mb-1">Aguardam verificação</div>
-          <div className="text-2xl font-display font-black text-amber-600">{estatisticas.pendentes}</div>
-        </div>
+        ))}
       </div>
 
-      {/* Formulário de novo registo */}
-      <Card title="📝 Nova Aposta" icon={<span>📝</span>}>
+      {/* ── Formulário nova aposta ── */}
+      <div style={glassCardStyle}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+          <span style={{ fontSize: '20px' }}>📝</span>
+          <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700 }}>Nova Aposta</h3>
+        </div>
+
         {error && (
-          <div className="bg-red-50 border border-red-200 rounded-xl p-3 mb-4 text-red-700 text-sm">
+          <div style={{ background: 'rgba(255,75,75,0.1)', border: '1px solid rgba(255,75,75,0.2)', borderRadius: '12px', padding: '12px', marginBottom: '16px', color: '#FF4B4B', fontSize: '14px' }}>
             ⚠️ {error}
           </div>
         )}
+
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div>
-              <label className="block text-sm font-bold mb-1">Data</label>
-              <input
-                type="date"
-                value={formData.data}
-                onChange={(e) => setFormData({ ...formData, data: e.target.value })}
-                className="w-full rounded-xl ring-1 ring-neutral-200 px-3 py-2 text-sm"
-                required
-              />
+              <label style={{ fontSize: '12px', fontWeight: 700, marginBottom: '4px', display: 'block', color: '#9CA3AF' }}>Data</label>
+              <input type="date" value={formData.data} onChange={e => setFormData({ ...formData, data: e.target.value })} style={inputStyle} required />
             </div>
             <div>
-              <label className="block text-sm font-bold mb-1">Hora</label>
-              <input
-                type="time"
-                value={formData.hora}
-                onChange={(e) => setFormData({ ...formData, hora: e.target.value })}
-                className="w-full rounded-xl ring-1 ring-neutral-200 px-3 py-2 text-sm"
-                required
-              />
+              <label style={{ fontSize: '12px', fontWeight: 700, marginBottom: '4px', display: 'block', color: '#9CA3AF' }}>Hora</label>
+              <input type="time" value={formData.hora} onChange={e => setFormData({ ...formData, hora: e.target.value })} style={inputStyle} required />
             </div>
             <div>
-              <label className="block text-sm font-bold mb-1">Valor (Kz)</label>
-              <input
-                type="number"
-                min="50"
-                max="1000"
-                step="50"
-                value={formData.valorApostado}
-                onChange={(e) => setFormData({ ...formData, valorApostado: parseInt(e.target.value) || 0 })}
-                className="w-full rounded-xl ring-1 ring-neutral-200 px-3 py-2 text-sm"
-                required
-              />
+              <label style={{ fontSize: '12px', fontWeight: 700, marginBottom: '4px', display: 'block', color: '#9CA3AF' }}>Valor (Kz)</label>
+              <input type="number" min="50" max="1000" step="50" value={formData.valorApostado} onChange={e => setFormData({ ...formData, valorApostado: parseInt(e.target.value) || 0 })} style={inputStyle} required />
             </div>
             <div>
-              <label className="block text-sm font-bold mb-1">Sessão</label>
-              <select
-                value={formData.sessao}
-                onChange={(e) => setFormData({ ...formData, sessao: e.target.value as any })}
-                className="w-full rounded-xl ring-1 ring-neutral-200 px-3 py-2 text-sm"
-              >
-                <option value="Fezada">🌅 Fezada</option>
-                <option value="Kazola">☀️ Kazola</option>
-                <option value="Eskebra">🌙 Eskebra</option>
+              <label style={{ fontSize: '12px', fontWeight: 700, marginBottom: '4px', display: 'block', color: '#9CA3AF' }}>Sessão</label>
+              <select value={formData.sessao} onChange={e => setFormData({ ...formData, sessao: e.target.value as any })} style={inputStyle}>
+                <option value="Fezada">☀️ Fezada</option>
+                <option value="Kazola">🌙 Kazola</option>
+                <option value="Eskebra">⚡ Eskebra</option>
                 <option value="Aqueceu">🔥 Aqueceu</option>
               </select>
             </div>
           </div>
 
           <div>
-            <label className="block text-sm font-bold mb-2">Combinação (5 números de 1 a 90)</label>
+            <label style={{ fontSize: '12px', fontWeight: 700, marginBottom: '8px', display: 'block', color: '#9CA3AF' }}>Combinação (5 números de 1 a 90)</label>
             <div className="flex gap-2 flex-wrap">
               {formData.combinacao.map((num, idx) => (
                 <input
@@ -399,8 +426,8 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate 
                   min="1"
                   max="90"
                   value={num}
-                  onChange={(e) => updateCombinacao(idx, e.target.value)}
-                  className="w-16 rounded-xl ring-1 ring-neutral-200 px-2 py-2 text-sm text-center font-bold"
+                  onChange={e => updateCombinacao(idx, e.target.value)}
+                  style={{ ...inputStyle, width: '64px', textAlign: 'center', fontWeight: 700 }}
                   required
                 />
               ))}
@@ -408,11 +435,11 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate 
           </div>
 
           <div>
-            <label className="block text-sm font-bold mb-1">Notas (opcional)</label>
+            <label style={{ fontSize: '12px', fontWeight: 700, marginBottom: '4px', display: 'block', color: '#9CA3AF' }}>Notas (opcional)</label>
             <textarea
               value={formData.notas}
-              onChange={(e) => setFormData({ ...formData, notas: e.target.value })}
-              className="w-full rounded-xl ring-1 ring-neutral-200 px-3 py-2 text-sm"
+              onChange={e => setFormData({ ...formData, notas: e.target.value })}
+              style={{ ...inputStyle, width: '100%', minHeight: '60px' }}
               rows={2}
               placeholder="Observações sobre esta aposta..."
             />
@@ -420,134 +447,200 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate 
 
           <button
             type="submit"
-            className="w-full min-h-[52px] bg-red-600 hover:bg-red-700 text-white font-display font-black text-lg rounded-2xl transition"
+            style={{ width: '100%', padding: '14px', background: 'linear-gradient(135deg, #00F5A0, #00C896)', color: '#0B0F19', fontWeight: 800, fontSize: '18px', borderRadius: '16px', border: 'none', cursor: 'pointer', transition: 'all 0.2s' }}
+            onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = '0 0 15px rgba(0,245,160,0.3)'; }}
+            onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'none'; }}
           >
             REGISTAR APOSTA
           </button>
         </form>
-      </Card>
+      </div>
 
-      {/* Lista de apostas */}
-      <Card title="📋 Histórico de Apostas" icon={<span>📋</span>}>
+      {/* ── Histórico de apostas ── */}
+      <div style={glassCardStyle}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+          <span style={{ fontSize: '20px' }}>📋</span>
+          <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700 }}>Histórico de Apostas</h3>
+        </div>
+
         {registos.length === 0 ? (
-          <div className="text-center py-8 text-neutral-500">
-            <div className="text-4xl mb-2">📓</div>
+          <div style={{ textAlign: 'center', padding: '32px', color: '#6B7280' }}>
+            <div style={{ fontSize: '48px', marginBottom: '8px' }}>📓</div>
             <p>Nenhuma aposta registada ainda.</p>
-            <p className="text-xs mt-1">Começa a registar as tuas apostas acima!</p>
+            <p style={{ fontSize: '12px', marginTop: '4px' }}>Começa a registar as tuas apostas acima!</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-neutral-100">
-                <tr className="text-left text-neutral-600">
-                  <th className="px-3 py-2 font-bold">Data/Hora</th>
-                  <th className="px-3 py-2 font-bold">Combinação</th>
-                  <th className="px-3 py-2 font-bold">Sessão</th>
-                  <th className="px-3 py-2 font-bold">Valor</th>
-                  <th className="px-3 py-2 font-bold">Acertos</th>
-                  <th className="px-3 py-2 font-bold">Prémio</th>
-                  <th className="px-3 py-2 font-bold">Estado</th>
-                  <th className="px-3 py-2 font-bold">Acções</th>
+            <table style={{ width: '100%', fontSize: '14px', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ background: 'rgba(255,255,255,0.05)' }}>
+                  {['Data/Hora', 'Combinação', 'Sessão', 'Valor', 'Acertos', 'Prémio', 'Estado', 'Acções'].map(h => (
+                    <th key={h} style={{ padding: '12px', textAlign: 'left', fontWeight: 700, color: '#9CA3AF' }}>{h}</th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
-                {registos.map((registo) => (
-                  <tr key={registo.id} className="border-b border-neutral-100 hover:bg-neutral-50">
-                    <td className="px-3 py-2">
-                      <div className="font-mono text-xs">{registo.data}</div>
-                      <div className="text-xs text-neutral-400">{registo.hora}</div>
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="flex gap-1">
-                        {registo.combinacao.map((num, idx) => (
-                          <Ball key={idx} n={num} size="sm" />
-                        ))}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 text-sm">{registo.sessao}</td>
-                    <td className="px-3 py-2 font-mono text-sm">{fmtKz(registo.valorApostado)}</td>
-                    <td className="px-3 py-2">
-                      {registo.acertos !== null ? (
-                        <span className={`font-bold ${registo.acertos >= 3 ? 'text-green-600' : 'text-amber-600'}`}>
-                          {registo.acertos}
+                {registos.map(registo => {
+                  const sc = sessaoConfig[registo.sessao] ?? { color: '#9CA3AF', icon: '🎲' };
+                  return (
+                    <tr key={registo.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+
+                      {/* Data/Hora */}
+                      <td style={{ padding: '12px' }}>
+                        <div style={{ fontFamily: 'monospace', fontSize: '12px', color: '#E5E7EB' }}>{registo.data}</div>
+                        <div style={{ fontSize: '11px', color: '#6B7280' }}>{registo.hora}</div>
+                      </td>
+
+                      {/* ✅ Combinação — ChromeBall em vez de Ball */}
+                      <td style={{ padding: '12px' }}>
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                          {registo.combinacao.map((num, idx) => (
+                            <ChromeBall
+                              key={idx}
+                              n={num}
+                              size="sm"
+                              variant="normal"
+                              animated={false}
+                            />
+                          ))}
+                        </div>
+                      </td>
+
+                      {/* Sessão */}
+                      <td style={{ padding: '12px' }}>
+                        <span style={{
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          padding: '3px 10px',
+                          borderRadius: '20px',
+                          background: `${sc.color}18`,
+                          border: `1px solid ${sc.color}40`,
+                          color: sc.color,
+                        }}>
+                          {sc.icon} {registo.sessao}
                         </span>
-                      ) : (
-                        <span className="text-neutral-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 font-mono text-sm">
-                      {registo.premioRecebido > 0 ? (
-                        <span className="text-green-600 font-bold">{fmtKz(registo.premioRecebido)}</span>
-                      ) : (
-                        <span className="text-neutral-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2">
-                      <span className={`px-2 py-1 rounded-full text-xs font-bold ${
-                        registo.resultado === 'verificado' 
-                          ? 'bg-green-100 text-green-700' 
-                          : 'bg-amber-100 text-amber-700'
-                      }`}>
-                        {registo.resultado === 'verificado' ? 'Verificado' : 'Pendente'}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="flex gap-2">
-                        {registo.resultado === 'pendente' && (
-                          <button
-                            onClick={() => handleVerificar(registo.id)}
-                            className="text-green-600 hover:underline text-xs font-bold"
-                          >
-                            Verificar
-                          </button>
+                      </td>
+
+                      {/* Valor */}
+                      <td style={{ padding: '12px', fontFamily: 'monospace', color: '#E5E7EB' }}>
+                        {fmtKz(registo.valorApostado)}
+                      </td>
+
+                      {/* Acertos */}
+                      <td style={{ padding: '12px' }}>
+                        {registo.acertos !== null ? (
+                          <span style={{
+                            fontWeight: 800,
+                            fontSize: '16px',
+                            color: registo.acertos >= 3 ? '#00F5A0' : registo.acertos >= 2 ? '#FFD700' : '#FF4B4B',
+                          }}>
+                            {registo.acertos}
+                          </span>
+                        ) : (
+                          <span style={{ color: '#6B7280' }}>—</span>
                         )}
-                        <button
-                          onClick={() => handleEliminar(registo.id)}
-                          className="text-red-600 hover:underline text-xs font-bold"
-                        >
-                          Eliminar
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+
+                      {/* Prémio */}
+                      <td style={{ padding: '12px', fontFamily: 'monospace' }}>
+                        {registo.premioRecebido > 0 ? (
+                          <span style={{ color: '#00F5A0', fontWeight: 700 }}>{fmtKz(registo.premioRecebido)}</span>
+                        ) : (
+                          <span style={{ color: '#6B7280' }}>—</span>
+                        )}
+                      </td>
+
+                      {/* Estado */}
+                      <td style={{ padding: '12px' }}>
+                        <span style={{
+                          padding: '4px 10px',
+                          borderRadius: '20px',
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          background: registo.resultado === 'verificado'
+                            ? 'rgba(0,245,160,0.15)'
+                            : 'rgba(255,215,0,0.15)',
+                          border: registo.resultado === 'verificado'
+                            ? '1px solid rgba(0,245,160,0.3)'
+                            : '1px solid rgba(255,215,0,0.3)',
+                          color: registo.resultado === 'verificado' ? '#00F5A0' : '#FFD700',
+                        }}>
+                          {registo.resultado === 'verificado' ? '✅ Verificado' : '⏳ Pendente'}
+                        </span>
+                      </td>
+
+                      {/* Acções */}
+                      <td style={{ padding: '12px' }}>
+                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                          {registo.resultado === 'pendente' && (
+                            <>
+                              <button
+                                onClick={() => handleVerificar(registo.id)}
+                                style={{ color: '#00F5A0', fontSize: '11px', fontWeight: 700, background: 'none', border: 'none', cursor: 'pointer' }}
+                              >
+                                Manual
+                              </button>
+                              <button
+                                onClick={() => conferirAutomaticamente(registo)}
+                                disabled={conferindoAuto === registo.id}
+                                style={{
+                                  color: '#60A5FA',
+                                  fontSize: '11px',
+                                  fontWeight: 700,
+                                  background: 'none',
+                                  border: 'none',
+                                  cursor: conferindoAuto === registo.id ? 'wait' : 'pointer',
+                                  opacity: conferindoAuto === registo.id ? 0.5 : 1,
+                                }}
+                              >
+                                {conferindoAuto === registo.id ? '⏳ A conferir...' : 'Auto'}
+                              </button>
+                            </>
+                          )}
+                          <button
+                            onClick={() => handleEliminar(registo.id)}
+                            style={{ color: '#FF4B4B', fontSize: '11px', fontWeight: 700, background: 'none', border: 'none', cursor: 'pointer' }}
+                          >
+                            Eliminar
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
-      </Card>
+      </div>
 
-      {/* Modal de verificação */}
-      <Modal
-        open={verificandoId !== null}
-        onClose={() => setVerificandoId(null)}
-        title="✅ Verificar Resultado"
-      >
+      {/* ── Modal de verificação manual ── */}
+      <Modal open={verificandoId !== null} onClose={() => setVerificandoId(null)} title="✅ Verificar Resultado">
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-bold mb-1">Número de acertos (0–5)</label>
+            <label style={{ fontSize: '14px', fontWeight: 700, marginBottom: '4px', display: 'block', color: '#9CA3AF' }}>Número de acertos (0–5)</label>
             <input
               type="number"
               min="0"
               max="5"
               value={acertosTemp}
-              onChange={(e) => setAcertosTemp(parseInt(e.target.value) || 0)}
-              className="w-full rounded-xl ring-1 ring-neutral-200 px-3 py-2"
+              onChange={e => setAcertosTemp(parseInt(e.target.value) || 0)}
+              style={inputStyle}
             />
           </div>
           <div>
-            <label className="block text-sm font-bold mb-1">Prémio recebido (Kz)</label>
+            <label style={{ fontSize: '14px', fontWeight: 700, marginBottom: '4px', display: 'block', color: '#9CA3AF' }}>Prémio recebido (Kz)</label>
             <input
               type="number"
               min="0"
               value={premioTemp}
-              onChange={(e) => setPremioTemp(parseInt(e.target.value) || 0)}
-              className="w-full rounded-xl ring-1 ring-neutral-200 px-3 py-2"
+              onChange={e => setPremioTemp(parseInt(e.target.value) || 0)}
+              style={inputStyle}
             />
           </div>
           <button
             onClick={confirmarVerificacao}
-            className="w-full py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-2xl transition"
+            style={{ width: '100%', padding: '12px', background: 'linear-gradient(135deg, #00F5A0, #00C896)', color: '#0B0F19', fontWeight: 700, borderRadius: '16px', border: 'none', cursor: 'pointer' }}
           >
             CONFIRMAR
           </button>

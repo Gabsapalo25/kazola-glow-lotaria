@@ -11,27 +11,76 @@ interface CardProps {
 
 export default function Card({ title, subtitle, icon, children, className = '', id }: CardProps) {
   return (
-    <div id={id} className={`rounded-3xl bg-white ring-1 ring-neutral-200 shadow-sm overflow-hidden ${className}`}>
+    <div 
+      id={id} 
+      className={className}
+      style={{
+        background: 'rgba(17, 24, 39, 0.7)',
+        backdropFilter: 'blur(12px)',
+        border: '1px solid rgba(255, 255, 255, 0.08)',
+        borderRadius: '24px',
+        boxShadow: '0 4px 20px rgba(0, 0, 0, 0.2)',
+        overflow: 'hidden',
+        transition: 'all 0.25s ease',
+      }}
+    >
       {(title || icon) && (
-        <div className="px-5 pt-5 pb-4 border-b border-neutral-100 flex items-start gap-3">
+        <div 
+          style={{
+            padding: '20px 20px 16px 20px',
+            borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: '12px',
+          }}
+        >
           {icon && (
-            <div className="w-10 h-10 rounded-2xl bg-neutral-100 flex items-center justify-center text-xl shrink-0">
+            <div 
+              style={{
+                width: '40px',
+                height: '40px',
+                borderRadius: '16px',
+                background: 'rgba(255, 255, 255, 0.05)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '1.25rem',
+                flexShrink: 0,
+              }}
+            >
               {icon}
             </div>
           )}
-          <div className="min-w-0">
+          <div style={{ minWidth: 0, flex: 1 }}>
             {title && (
-              <h2 className="font-display font-bold text-lg leading-tight text-neutral-900">
+              <h2 
+                style={{
+                  fontWeight: 800,
+                  fontSize: '1.125rem',
+                  lineHeight: 1.3,
+                  color: '#F3F4F6',
+                  margin: 0,
+                }}
+              >
                 {title}
               </h2>
             )}
             {subtitle && (
-              <p className="text-sm text-neutral-500 mt-0.5 leading-relaxed">{subtitle}</p>
+              <p 
+                style={{
+                  fontSize: '0.875rem',
+                  color: '#6B7280',
+                  marginTop: '4px',
+                  lineHeight: 1.5,
+                }}
+              >
+                {subtitle}
+              </p>
             )}
           </div>
         </div>
       )}
-      <div className="p-5">{children}</div>
+      <div style={{ padding: '20px' }}>{children}</div>
     </div>
   );
 }

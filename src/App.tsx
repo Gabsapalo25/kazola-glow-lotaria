@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import logoImg from './assets/logo.jpg';
 import Ball from './components/Ball';
 import Card from './components/Card';
@@ -12,6 +13,13 @@ import DiarioApostas from './components/DiarioApostas';
 import PlanoSemanal from './components/PlanoSemanal';
 import RelatorioMensal from './components/RelatorioMensal';
 import ChatBot from './components/ChatBot';
+import ChromeBall from './components/ChromeBall';
+import MethodCard, { type MethodId } from './components/MethodCard';
+import MetricsStrip from './components/MetricsStrip';
+import Speedometer from './components/Speedometer';
+import HistoryRowV2 from './components/HistoryRowV2';
+import AdminDrawer from './components/AdminDrawer';
+import './Styles/kazola-theme.css';
 import {
   TOTAL_NUMBERS,
   PICK_SIZE,
@@ -69,7 +77,127 @@ import {
 } from './lib/session';
 
 // =============================================================
-// CABEÇALHOS DISTINTOS POR TAB
+// DECLARAÇÕES GLOBAIS PARA ANALYTICS
+// =============================================================
+declare global {
+  interface Window {
+    dataLayer: any[];
+    gtag: (...args: any[]) => void;
+    fbq: any;
+  }
+}
+
+// =============================================================
+// GOOGLE ANALYTICS, FACEBOOK PIXEL
+// =============================================================
+const GA_ID = 'G-T60PHEZ1S0';
+const FB_ID = '1714043449606804';
+let _gaInitialized = false;
+let _fbInitialized = false;
+function initGA() {
+  if (_gaInitialized) return;
+  _gaInitialized = true;
+  const script = document.createElement('script');
+  script.async = true;
+  script.src = `https://www.googletagmanager.com/gtag/js?id=${GA_ID}`;
+  document.head.appendChild(script);
+  window.dataLayer = window.dataLayer || [];
+  window.gtag = function() { window.dataLayer.push(arguments); };
+  window.gtag('js', new Date());
+  window.gtag('config', GA_ID);
+}
+
+function initFB() {
+   if (_fbInitialized) return;
+  _fbInitialized = true;
+  window.fbq = function() {(window.fbq.queue = window.fbq.queue || []).push(arguments)};
+  const script = document.createElement('script');
+  script.src = 'https://connect.facebook.net/en_US/fbevents.js';
+  document.head.appendChild(script);
+  window.fbq('init', FB_ID);
+  window.fbq('track', 'PageView');
+}
+
+function track(event: string, data?: any) {
+  if (typeof window.gtag === 'function') window.gtag('event', event, data);
+  if (typeof window.fbq === 'function') window.fbq('track', event, data);
+}
+
+// =============================================================
+// SISTEMA DE VALIDAÇÃO DE PERFORMANCE
+// =============================================================
+interface ValidationRecord {
+  id: string;
+  date: string;
+  strategy: string;
+  hits: number;
+  lines: number;
+  drawnNumbers: number[];
+  stakePerLine?: number;
+  winAmount?: number;
+}
+
+function savePerformance(strategy: string, hits: number, lines: number, drawnNumbers: number[], stakePerLine: number = 100) {
+  const history: ValidationRecord[] = JSON.parse(localStorage.getItem('kazola_performance') || '[]');
+  const multipliers: Record<number, number> = { 2: 10, 3: 120, 4: 5000, 5: 100000 };
+  const mult = multipliers[hits as keyof typeof multipliers] || 0;
+  const winAmount = stakePerLine * mult;
+  history.unshift({ id: Date.now().toString(), date: new Date().toISOString(), strategy, hits, lines, drawnNumbers, stakePerLine, winAmount });
+  localStorage.setItem('kazola_performance', JSON.stringify(history.slice(0, 200)));
+  track('validation', { strategy, hits, lines, winAmount });
+  
+  // Se ganhou, celebrar com confetes
+  if (hits >= 3) {
+    celebrateWin(hits, winAmount);
+  }
+}
+
+function celebrateWin(hits: number, winAmount: number) {
+  const colors = ['#FFD700', '#00F5A0', '#FF4B4B', '#60A5FA', '#FF6B6B', '#DC2626'];
+  for (let i = 0; i < 60; i++) {
+    const particle = document.createElement('div');
+    particle.className = 'ball-particle';
+    particle.style.left = Math.random() * window.innerWidth + 'px';
+    particle.style.top = window.innerHeight - 100 + 'px';
+    particle.style.background = `radial-gradient(circle, ${colors[Math.floor(Math.random() * colors.length)]}, transparent)`;
+    particle.style.width = Math.random() * 12 + 4 + 'px';
+    particle.style.height = particle.style.width;
+    particle.style.animationDuration = `${0.5 + Math.random() * 0.8}s`;
+    document.body.appendChild(particle);
+    setTimeout(() => particle.remove(), 1000);
+  }
+  
+  if ('vibrate' in navigator && hits >= 4) {
+    navigator.vibrate([200, 100, 200, 100, 300]);
+  }
+}
+
+function getPerformance() {
+  const history: ValidationRecord[] = JSON.parse(localStorage.getItem('kazola_performance') || '[]');
+  const byStrategy = new Map<string, { total: number; hits2Plus: number; totalWin: number; linesPlayed: number }>();
+  for (const record of history) {
+    const strat = record.strategy;
+    if (!byStrategy.has(strat)) byStrategy.set(strat, { total: 0, hits2Plus: 0, totalWin: 0, linesPlayed: 0 });
+    const stats = byStrategy.get(strat)!;
+    stats.total++;
+    stats.linesPlayed += record.lines;
+    if (record.hits >= 2) stats.hits2Plus++;
+    if (record.winAmount) stats.totalWin += record.winAmount;
+  }
+  const kazolaStats = byStrategy.get('kazola') || { total: 0, hits2Plus: 0, totalWin: 0, linesPlayed: 0 };
+  const { total, hits2Plus, totalWin, linesPlayed } = kazolaStats;
+  return {
+    total,
+    hits2Plus,
+    winRate: total ? (hits2Plus / total * 100).toFixed(1) : 0,
+    totalWin,
+    linesPlayed,
+    byStrategy: Object.fromEntries(byStrategy),
+  };
+}
+
+// =============================================================
+// CABEÇALHOS POR TAB
 // =============================================================
 const TAB_HEADERS = {
   loto: {
@@ -79,7 +207,6 @@ const TAB_HEADERS = {
     bg: 'linear-gradient(135deg, #0a0a1a 0%, #1a0a2e 50%, #0d1a0a 100%)',
     icon: '🎱',
     badge: 'SORTEIO DIÁRIO',
-    badgeColor: '#E63946',
   },
   totobola: {
     title: 'TOTOBOLA',
@@ -88,7 +215,6 @@ const TAB_HEADERS = {
     bg: 'linear-gradient(135deg, #0a1a0a 0%, #0d2a1a 50%, #0a0d1a 100%)',
     icon: '⚽',
     badge: 'EM BREVE',
-    badgeColor: '#22A55A',
   },
   premios: {
     title: 'PRÉMIOS & RESULTADOS',
@@ -97,8 +223,15 @@ const TAB_HEADERS = {
     bg: 'linear-gradient(135deg, #1a0a00 0%, #2a1500 50%, #1a0a0a 100%)',
     icon: '🏆',
     badge: 'ÚLTIMOS RESULTADOS',
-    badgeColor: '#1E40AF',
   },
+};
+
+// Configuração dos métodos de geração
+const METHOD_CONFIG: Record<string, { name: string; description: string; icon: string; color: string; premium: boolean }> = {
+  equilibrado: { name: 'Equilibrado', description: 'Um número por cada faixa de 18 (1-18, 19-36…). Recomendado.', icon: '⚖️', color: '#60A5FA', premium: false },
+  kazola:      { name: 'Kazola',      description: 'Método baseado em padrões históricos e tendências.',           icon: '🌙', color: '#00F5A0', premium: false },
+  frequencia:  { name: 'Frequência',  description: 'Pondera pelos números mais frequentes recentes.',              icon: '📈', color: '#FFD700', premium: true  },
+  montecarlo:  { name: 'Monte Carlo', description: 'Pesos históricos + ruído gaussiano.',                         icon: '🎲', color: '#FFD700', premium: true  },
 };
 
 type FontSize = 'normal' | 'large' | 'xlarge';
@@ -118,16 +251,9 @@ function fmtKz(n: number) {
   return n.toLocaleString('pt-AO', { style: 'currency', currency: 'AOA', maximumFractionDigits: 0 });
 }
 
-// =============================================================
-// 1. FUNÇÕES DE CACHE
-// =============================================================
 function loadCachedDraws(): Draw[] | null {
-  try {
-    const cached = localStorage.getItem('kazola_last_draws');
-    return cached ? JSON.parse(cached) : null;
-  } catch { 
-    return null; 
-  }
+  try { const c = localStorage.getItem('kazola_last_draws'); return c ? JSON.parse(c) : null; }
+  catch { return null; }
 }
 
 function saveCachedDraws(draws: Draw[]) {
@@ -137,38 +263,55 @@ function saveCachedDraws(draws: Draw[]) {
   } catch { /* silent */ }
 }
 
+async function shareCombination(numbers: number[], appName: string) {
+  const text = `🎯 Minha combinação no ${appName}: ${numbers.join(', ')}`;
+  try {
+    if (navigator.share) {
+      await navigator.share({ title: appName, text, url: window.location.href });
+      track('share', { method: 'native' });
+    } else {
+      await navigator.clipboard.writeText(text);
+      track('share', { method: 'clipboard' });
+      return 'copied';
+    }
+  } catch (error) {
+    track('share_error', { error: String(error) });
+    throw error;
+  }
+}
+
 export default function App() {
-  // ── SESSÃO PROFISSIONAL ─────────────────────────────────
   const [session, setSession] = useState<UserSession | null>(() => loadSession());
   const [showGate, setShowGate] = useState<boolean>(() => !loadSession());
   const [gateReason, setGateReason] = useState<'first_visit' | 'trial_expired' | 'daily_limit'>('first_visit');
   const [showUpgrade, setShowUpgrade] = useState(false);
   const [showTokenActivation, setShowTokenActivation] = useState(false);
   const [toast, setToast] = useState<{ msg: string; type: 'error' | 'success' | 'info' } | null>(null);
+  const [darkMode, setDarkMode] = useState<boolean>(() => {
+    try { return localStorage.getItem('kazola_dark_mode') === '1'; } catch { return false; }
+  });
 
   const showToast = useCallback((msg: string, type: 'error' | 'success' | 'info' = 'info') => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 4000);
   }, []);
 
-  // ── OFFLINE DETECTION ────────────────────────────────────
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   const [offlineBannerDismissed, setOfflineBannerDismissed] = useState(false);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
-    
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
-    
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
+    return () => { window.removeEventListener('online', handleOnline); window.removeEventListener('offline', handleOffline); };
   }, []);
 
-  // ── Acessibilidade / preferências ───────────────────────────────────
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark-mode', darkMode);
+    try { localStorage.setItem('kazola_dark_mode', darkMode ? '1' : '0'); } catch { /* ok */ }
+  }, [darkMode]);
+
   const [ageOk, setAgeOk] = useState<boolean>(() => {
     try { return localStorage.getItem('ln_age_ok') === '1'; } catch { return false; }
   });
@@ -178,48 +321,35 @@ export default function App() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [modalResponsavel, setModalResponsavel] = useState<ModalResponsavelType>(null);
 
-  // Estado para autoavaliação
-  const [autoavaliacaoRespostas, setAutoavaliacaoRespostas] = useState({
-    q1: '', q2: '', q3: '', q4: '', q5: ''
-  });
-
-  // Estado para temporizador
+  const [autoavaliacaoRespostas, setAutoavaliacaoRespostas] = useState({ q1: '', q2: '', q3: '', q4: '', q5: '' });
   const [timerMinutos, setTimerMinutos] = useState<number | null>(null);
   const [timerAtivo, setTimerAtivo] = useState(false);
-
-  // Estado para período de reflexão
   const [reflectionDays, setReflectionDays] = useState<number | null>(null);
   const [showReflectionConfirm, setShowReflectionConfirm] = useState(false);
 
-  // ── Dados dos sorteios ──────────────────────────────────────────────
   const [sorteios, setSorteios] = useState<Draw[]>([]);
   const [loadingApi, setLoadingApi] = useState(true);
   const [apiError, setApiError] = useState(false);
   const [temSorteioHoje, setTemSorteioHoje] = useState(false);
 
-  // ── Gerador ─────────────────────────────────────────────────────────
-  const [strategy, setStrategy] = useState<GenerationStrategy>('equilibrado');
+  const [strategy, setStrategy] = useState<GenerationStrategy>('kazola');
   const [lines, setLines] = useState(3);
   const [parity, setParity] = useState<Filter['parityBias']>('equilibrado');
   const [exclude, setExclude] = useState<number[]>([]);
   const [generated, setGenerated] = useState<{ numbers: number[]; id: number }[]>([]);
   const [favorites, setFavorites] = useState<{ numbers: number[]; id: number }[]>(() => {
-    try { const r = localStorage.getItem('ln_fav'); return r ? JSON.parse(r) : []; }
-    catch { return []; }
+    try { const r = localStorage.getItem('ln_fav'); return r ? JSON.parse(r) : []; } catch { return []; }
   });
 
-  // ── Histórico ───────────────────────────────────────────────────────
   const [windowSize, setWindowSize] = useState(60);
   const [activeDraw, setActiveDraw] = useState<Draw | null>(null);
   const [histPage, setHistPage] = useState(0);
   const HIST_PAGE_SIZE = 20;
 
-  // ── Totobola ────────────────────────────────────────────────────────
   const [boletim, setBoletim] = useState<BoletimTotobola | null>(null);
   const [totoLines, setTotoLines] = useState<string[][]>([]);
   const [totoCount, setTotoCount] = useState(1);
 
-  // ── Modais ──────────────────────────────────────────────────────────
   const [showTerms, setShowTerms] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
@@ -227,151 +357,92 @@ export default function App() {
   const [showPrizeModal, setShowPrizeModal] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
 
-  // ── Premium (sistema existente) ─────────────────────────────────────────
-  const premium = usePremium();
+  // Speedometer key para animação
+  const [speedometerKey, setSpeedometerKey] = useState(0);
+  const [speedometerHits, setSpeedometerHits] = useState(0);
 
-  // ── Simulador de Orçamento ──────────────────────────────────────────
+  const premium = usePremium();
   const [budget, setBudget] = useState<number>(500);
   const [stakePerLine, setStakePerLine] = useState<number>(100);
-
-  // ── Estado Prémios ──────────────────────────────────────────────────
   const [checkNumbers, setCheckNumbers] = useState('');
   const [checkResult, setCheckResult] = useState<string | null>(null);
 
-  // ── Verificar se pode gerar hoje (usando sessão profissional) ───────
   const canGenerateTodayCheck = useMemo(() => {
     if (!session) return false;
     if (session.isPremium) return true;
     return canGenerate(session).ok;
   }, [session, premium.isActive]);
 
-  // ── Métodos disponíveis para free ───────────────────────────────────
   const availableStrategies: GenerationStrategy[] = (session?.isPremium || premium.isActive)
-    ? ['equilibrado', 'frequencia', 'montecarlo', 'aleatorio']
-    : ['equilibrado', 'aleatorio'];
+    ? ['equilibrado', 'frequencia', 'montecarlo', 'kazola']
+    : ['equilibrado', 'kazola'];
 
-  // ── Função de verificação premium no servidor ───────────────────────
   const verifyPremiumStatus = useCallback(async (currentSession: UserSession) => {
     if (shouldVerifyWithServer(currentSession)) {
       try {
         const result = await checkPremiumStatus(currentSession.email);
         if (result.ok && result.isPremium && result.expiracao) {
-          const plano = result.plano === 'anual' ? 'anual' : 
-                        result.plano === 'vitalicio' ? 'vitalicio' : 'mensal';
+          const plano = result.plano === 'anual' ? 'anual' : result.plano === 'vitalicio' ? 'vitalicio' : 'mensal';
           const updatedSession = activatePremiumFromServer(currentSession, plano, result.expiracao);
           setSession(updatedSession);
           showToast('Premium verificado e activado!', 'success');
         }
-      } catch (error) {
-        console.error('Erro ao verificar premium:', error);
-      }
+      } catch (error) { console.error('Erro ao verificar premium:', error); }
     }
   }, [showToast]);
 
-  // ── Verificação periódica de premium ────────────────────────────────
   useEffect(() => {
-    if (session && !isPremiumValid(session)) {
-      verifyPremiumStatus(session);
-    }
+    if (session && !isPremiumValid(session)) verifyPremiumStatus(session);
   }, [session, verifyPremiumStatus]);
 
-  // ── Registro via Gate ───────────────────────────────────
+  useEffect(() => {
+    initGA();
+    initFB();
+    track('PageView', { page: 'home', timestamp: new Date().toISOString() });
+  }, []);
+
   const handleRegister = useCallback((email: string) => {
     const now = Date.now();
     const newSession: UserSession = {
-      email,
-      registeredAt: now,
-      lastGenerationDate: null,
-      generationsToday: 0,
-      isPremium: false,
-      trialExpires: now + TRIAL_DAYS * 24 * 60 * 60 * 1000,
-      plano: null,
-      premiumExpiracao: null,
-      tokenActivacao: null,
-      verificadoNoServidor: false,
-      ultimaVerificacao: null,
-      syncEnabled: true,
-      lastSync: null,
+      email, registeredAt: now, lastGenerationDate: null, generationsToday: 0,
+      isPremium: false, trialExpires: now + TRIAL_DAYS * 24 * 60 * 60 * 1000,
+      plano: null, premiumExpiracao: null, tokenActivacao: null,
+      verificadoNoServidor: false, ultimaVerificacao: null, syncEnabled: true, lastSync: null,
     };
     saveSession(newSession);
     setSession(newSession);
     setShowGate(false);
+    track('complete_registration', { method: 'trial', days: TRIAL_DAYS });
     showToast(`Bem-vindo! Trial de ${TRIAL_DAYS} dias activado.`, 'success');
   }, [showToast]);
 
-  // ── Verificação de acesso ───────────────────────────────
   const checkAccess = useCallback((): boolean => {
-    if (!session) {
-      setGateReason('first_visit');
-      setShowGate(true);
-      return false;
-    }
+    if (!session) { setGateReason('first_visit'); setShowGate(true); return false; }
     const check = canGenerate(session);
     if (!check.ok) {
-      if (check.reason === 'trial_expired') {
-        setGateReason('trial_expired');
-        setShowGate(true);
-      }
-      if (check.reason === 'daily_limit') {
-        setGateReason('daily_limit');
-        setShowGate(true);
-      }
+      if (check.reason === 'trial_expired') { setGateReason('trial_expired'); setShowGate(true); }
+      if (check.reason === 'daily_limit') { setGateReason('daily_limit'); setShowGate(true); }
       return false;
     }
     return true;
   }, [session]);
 
-  // ── Cálculo das recomendações ────────────────────────────────────────
   const recs = useMemo(() => {
     const maxLines = Math.floor(budget / stakePerLine);
-    if (maxLines <= 3) {
-      return { equilibrado: maxLines, aleatorio: 0, montecarlo: 0, frequencia: 0, total: maxLines };
-    } else if (maxLines <= 6) {
-      return {
-        equilibrado: Math.floor(maxLines * 0.6),
-        aleatorio: Math.ceil(maxLines * 0.2),
-        montecarlo: Math.ceil(maxLines * 0.2),
-        frequencia: 0,
-        total: maxLines
-      };
-    } else if (maxLines <= 10) {
-      return {
-        equilibrado: Math.floor(maxLines * 0.5),
-        aleatorio: Math.ceil(maxLines * 0.2),
-        montecarlo: Math.ceil(maxLines * 0.2),
-        frequencia: Math.ceil(maxLines * 0.1),
-        total: maxLines
-      };
-    } else {
-      return {
-        equilibrado: Math.floor(maxLines * 0.4),
-        aleatorio: Math.ceil(maxLines * 0.2),
-        montecarlo: Math.ceil(maxLines * 0.2),
-        frequencia: Math.ceil(maxLines * 0.2),
-        total: maxLines
-      };
-    }
+    if (maxLines <= 3) return { equilibrado: maxLines, kazola: 0, montecarlo: 0, frequencia: 0, total: maxLines };
+    if (maxLines <= 6) return { equilibrado: Math.floor(maxLines * 0.6), kazola: Math.ceil(maxLines * 0.2), montecarlo: Math.ceil(maxLines * 0.2), frequencia: 0, total: maxLines };
+    if (maxLines <= 10) return { equilibrado: Math.floor(maxLines * 0.5), kazola: Math.ceil(maxLines * 0.2), montecarlo: Math.ceil(maxLines * 0.2), frequencia: Math.ceil(maxLines * 0.1), total: maxLines };
+    return { equilibrado: Math.floor(maxLines * 0.4), kazola: Math.ceil(maxLines * 0.2), montecarlo: Math.ceil(maxLines * 0.2), frequencia: Math.ceil(maxLines * 0.2), total: maxLines };
   }, [budget, stakePerLine]);
 
-  // ── Efeitos ─────────────────────────────────────────────────────────
-  useEffect(() => {
-    document.documentElement.classList.toggle('high-contrast', highContrast);
-  }, [highContrast]);
+  useEffect(() => { document.documentElement.classList.toggle('high-contrast', highContrast); }, [highContrast]);
+  useEffect(() => { try { localStorage.setItem('ln_fav', JSON.stringify(favorites)); } catch { /* ok */ } }, [favorites]);
 
-  useEffect(() => {
-    try { localStorage.setItem('ln_fav', JSON.stringify(favorites)); } catch { /* ok */ }
-  }, [favorites]);
-
-  // Temporizador
   useEffect(() => {
     if (timerAtivo && timerMinutos && timerMinutos > 0) {
       const interval = setInterval(() => {
         setTimerMinutos(prev => {
-          if (prev && prev <= 1) {
-            setTimerAtivo(false);
-            alert('⏰ Tempo esgotado! Faça uma pausa de 5 minutos.');
-            return 0;
-          }
+          if (prev && prev <= 1) { setTimerAtivo(false); alert('⏰ Tempo esgotado! Faça uma pausa de 5 minutos.'); return 0; }
           return prev ? prev - 1 : 0;
         });
       }, 60000);
@@ -379,139 +450,71 @@ export default function App() {
     }
   }, [timerAtivo, timerMinutos]);
 
-  // ── Buscar dados da API ─────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoadingApi(true);
       setApiError(false);
-      
-      // Se estiver offline, usa cache imediatamente
       if (!isOnline) {
         const cached = loadCachedDraws();
-        if (cached && cached.length > 0) {
-          setSorteios(cached);
-          setActiveDraw(cached[0]);
-          setTemSorteioHoje(false);
-          setLoadingApi(false);
-          return;
-        }
+        if (cached && cached.length > 0) { setSorteios(cached); setActiveDraw(cached[0]); setTemSorteioHoje(false); setLoadingApi(false); return; }
       }
-      
       try {
         const result = await fetchRealDraws();
-        
-        if (!cancelled && result.draws.length > 0) {
-          setSorteios(result.draws);
-          setActiveDraw(result.draws[0]);
-          setTemSorteioHoje(result.hasToday);
-          
-          // Guarda em cache para uso offline
-          saveCachedDraws(result.draws);
-        } else if (!cancelled) {
-          // Tenta carregar do cache se API falhou
-          const cached = loadCachedDraws();
-          if (cached && cached.length > 0) {
-            setSorteios(cached);
-            setActiveDraw(cached[0]);
-            setTemSorteioHoje(false);
-            setApiError(true);
-          }
-        }
+        if (!cancelled && result.draws.length > 0) { setSorteios(result.draws); setActiveDraw(result.draws[0]); setTemSorteioHoje(result.hasToday); saveCachedDraws(result.draws); }
+        else if (!cancelled) { const cached = loadCachedDraws(); if (cached && cached.length > 0) { setSorteios(cached); setActiveDraw(cached[0]); setTemSorteioHoje(false); setApiError(true); } }
       } catch (error) {
         console.error('Erro ao buscar dados:', error);
         setApiError(true);
-        
-        // Fallback para cache apenas se existir
         const cached = loadCachedDraws();
-        if (cached && cached.length > 0) {
-          setSorteios(cached);
-          setActiveDraw(cached[0]);
-          setTemSorteioHoje(false);
-        }
+        if (cached && cached.length > 0) { setSorteios(cached); setActiveDraw(cached[0]); setTemSorteioHoje(false); }
       }
-      
       setLoadingApi(false);
     })();
     return () => { cancelled = true; };
   }, [isOnline]);
 
-  // Estatísticas
   const draws = sorteios;
   const freq = useMemo(() => computeFrequency(draws.slice(0, windowSize)), [draws, windowSize]);
   const weights = useMemo(() => freq.freq, [freq]);
   const hotCold = useMemo(() => hotColdRanking(draws, windowSize), [draws, windowSize]);
   const gaps = useMemo(() => gapAnalysis(draws), [draws]);
   const sum = useMemo(() => sumStats(draws), [draws]);
-  const parityStat = useMemo(() => parityStats(draws), [draws]);
+  const parityStat = useMemo(() => {
+  if (draws.length === 0) return { pairs: 0, odds: 0 };
+  const allNumbers = draws.slice(0, windowSize).flatMap(d => d.numbers);
+  return { pairs: allNumbers.filter(n => n % 2 === 0).length, odds: allNumbers.filter(n => n % 2 !== 0).length };
+}, [draws, windowSize]);
   const decades = useMemo(() => decadeStats(draws), [draws]);
   const probs = useMemo(() => probabilityHint(), []);
   const maxFreq = useMemo(() => Math.max(1, ...freq.freq.slice(1)), [freq]);
   const maxDecade = useMemo(() => Math.max(1, ...decades.map(d => d.count)), [decades]);
 
-  // Gerador Totobola
   function generateTotobolaLine(): string[] {
     const outcomes = ['1', 'X', '2'];
     return Array.from({ length: 13 }, () => outcomes[Math.floor(Math.random() * 3)]);
   }
 
-  // Calcular resultado da autoavaliação
   const autoavaliacaoScore = useMemo(() => {
     let score = 0;
-    if (autoavaliacaoRespostas.q1 === 'Frequentemente') score += 3;
-    else if (autoavaliacaoRespostas.q1 === 'Às vezes') score += 2;
-    else if (autoavaliacaoRespostas.q1 === 'Raramente') score += 1;
-
-    if (autoavaliacaoRespostas.q2 === 'Várias vezes') score += 3;
-    else if (autoavaliacaoRespostas.q2 === 'Uma vez') score += 2;
-
-    if (autoavaliacaoRespostas.q3 === 'Sim, várias') score += 3;
-    else if (autoavaliacaoRespostas.q3 === 'Sim, uma vez') score += 2;
-
-    if (autoavaliacaoRespostas.q4 === 'Frequentemente') score += 3;
-    else if (autoavaliacaoRespostas.q4 === 'Às vezes') score += 2;
-
-    if (autoavaliacaoRespostas.q5 === 'Sim, significativamente') score += 3;
-    else if (autoavaliacaoRespostas.q5 === 'Sim, ligeiramente') score += 2;
-
+    if (autoavaliacaoRespostas.q1 === 'Frequentemente') score += 3; else if (autoavaliacaoRespostas.q1 === 'Às vezes') score += 2; else if (autoavaliacaoRespostas.q1 === 'Raramente') score += 1;
+    if (autoavaliacaoRespostas.q2 === 'Várias vezes') score += 3; else if (autoavaliacaoRespostas.q2 === 'Uma vez') score += 2;
+    if (autoavaliacaoRespostas.q3 === 'Sim, várias') score += 3; else if (autoavaliacaoRespostas.q3 === 'Sim, uma vez') score += 2;
+    if (autoavaliacaoRespostas.q4 === 'Frequentemente') score += 3; else if (autoavaliacaoRespostas.q4 === 'Às vezes') score += 2;
+    if (autoavaliacaoRespostas.q5 === 'Sim, significativamente') score += 3; else if (autoavaliacaoRespostas.q5 === 'Sim, ligeiramente') score += 2;
     return score;
   }, [autoavaliacaoRespostas]);
 
   const autoavaliacaoFeedback = useMemo(() => {
-    if (autoavaliacaoScore >= 10) {
-      return {
-        nivel: '⚠️ Atenção necessária',
-        cor: 'red',
-        mensagem: 'Os seus hábitos de jogo apresentam sinais de alerta significativos.',
-        acao: 'Recomendamos fortemente que procure apoio profissional no ISJ.'
-      };
-    } else if (autoavaliacaoScore >= 5) {
-      return {
-        nivel: '📊 Em observação',
-        cor: 'amber',
-        mensagem: 'Alguns comportamentos merecem atenção.',
-        acao: 'Defina limites de tempo e orçamento. Reveja daqui 30 dias.'
-      };
-    } else if (autoavaliacaoScore > 0) {
-      return {
-        nivel: '✅ Hábitos saudáveis',
-        cor: 'green',
-        mensagem: 'Os seus hábitos de jogo parecem equilibrados.',
-        acao: 'Continue a praticar o jogo responsável.'
-      };
-    }
+    if (autoavaliacaoScore >= 10) return { nivel: '⚠️ Atenção necessária', cor: 'red', mensagem: 'Os seus hábitos de jogo apresentam sinais de alerta significativos.', acao: 'Recomendamos fortemente que procure apoio profissional no ISJ.' };
+    if (autoavaliacaoScore >= 5) return { nivel: '📊 Em observação', cor: 'amber', mensagem: 'Alguns comportamentos merecem atenção.', acao: 'Defina limites de tempo e orçamento. Reveja daqui 30 dias.' };
+    if (autoavaliacaoScore > 0) return { nivel: '✅ Hábitos saudáveis', cor: 'green', mensagem: 'Os seus hábitos de jogo parecem equilibrados.', acao: 'Continue a praticar o jogo responsável.' };
     return null;
   }, [autoavaliacaoScore]);
 
-  // Handlers
   function onGenerate() {
     if (!checkAccess()) return;
-
-    if (!availableStrategies.includes(strategy)) {
-      alert(`⚠️ O método "${strategy}" está disponível apenas para Premium.`);
-      return;
-    }
-
+    if (!availableStrategies.includes(strategy)) { alert(`⚠️ O método "${strategy}" está disponível apenas para Premium.`); return; }
     const filter: Filter = { exclude, parityBias: parity };
     const out: { numbers: number[]; id: number }[] = [];
     const maxLines = (session?.isPremium || premium.isActive) ? lines : 1;
@@ -520,46 +523,63 @@ export default function App() {
       if (r) out.push({ numbers: r.numbers, id: Date.now() + i });
     }
     setGenerated(out);
-    if (session) {
-      const updated = recordGeneration(session);
-      setSession(updated);
-    }
+    if (session) { const updated = recordGeneration(session); setSession(updated); }
+    track('generate', { strategy, lines: out.length, isPremium: !!(session?.isPremium || premium.isActive) });
     showToast('Combinação gerada com sucesso!', 'success');
+    setSpeedometerHits(0);
+    setSpeedometerKey(k => k + 1);
+  }
+
+  function checkWin() {
+    if (!activeDraw || generated.length === 0) { showToast('Gere combinações primeiro ou aguarde o sorteio!', 'error'); return; }
+    const drawn = activeDraw.numbers;
+    let bestHits = 0;
+    for (const g of generated) {
+      const hits = g.numbers.filter(n => drawn.includes(n)).length;
+      if (hits > bestHits) bestHits = hits;
+    }
+    savePerformance(strategy, bestHits, generated.length, drawn, stakePerLine);
+    setSpeedometerHits(bestHits);
+    setSpeedometerKey(k => k + 1);
+    if (bestHits >= 2) {
+      const multipliers: Record<number, number> = { 2: 10, 3: 120, 4: 5000, 5: 100000 };
+      const winAmount = stakePerLine * (multipliers[bestHits as keyof typeof multipliers] || 0);
+      showToast(`🎉 Parabéns! ${bestHits} acerto${bestHits > 1 ? 's' : ''}! Ganhou ${fmtKz(winAmount)}!`, 'success');
+      
+      // Animação especial para prémios
+      if (bestHits >= 4) {
+        setTimeout(() => {
+          const elements = document.querySelectorAll('.chrome-ball');
+          elements.forEach((el, idx) => {
+            setTimeout(() => {
+              (el as HTMLElement).style.animation = 'slotWin 0.5s ease-out';
+              setTimeout(() => {
+                (el as HTMLElement).style.animation = '';
+              }, 500);
+            }, idx * 80);
+          });
+        }, 100);
+      }
+    } else {
+      showToast(`😢 ${bestHits} acerto${bestHits !== 1 ? 's' : ''}. Tente novamente!`, 'info');
+    }
+  }
+
+  async function handleShareCombination(numbers: number[]) {
+    try {
+      const result = await shareCombination(numbers, APP_NAME);
+      if (result === 'copied') showToast('📋 Combinação copiada para clipboard!', 'success');
+      else showToast('✨ Partilha concluída!', 'success');
+    } catch { showToast('Não foi possível partilhar', 'error'); }
   }
 
   function handleGenerateToto() {
     if (!checkAccess()) return;
     const allowed = (session?.isPremium || premium.isActive) ? totoCount : 1;
-    const lines = Array.from({ length: allowed }, generateTotobolaLine);
-    setTotoLines(lines);
-    if (session) {
-      const updated = recordGeneration(session);
-      setSession(updated);
-    }
+    const newLines = Array.from({ length: allowed }, generateTotobolaLine);
+    setTotoLines(newLines);
+    if (session) { const updated = recordGeneration(session); setSession(updated); }
     showToast('Previsão gerada com sucesso!', 'success');
-  }
-
-  function handleCheck() {
-    if (!checkAccess()) return;
-    const nums = checkNumbers.trim().split(/\s+/).map(Number).filter(n => n >= 1 && n <= 90);
-    if (nums.length !== 5) {
-      showToast('Insere 5 números válidos entre 1 e 90.', 'error');
-      return;
-    }
-    const matches = Math.floor(Math.random() * 6);
-    const prizes: Record<number, string> = {
-      5: '🎉 JACKPOT! Consulta o agente mais próximo!',
-      4: '🥇 4 acertos — Prémio de 2ª categoria!',
-      3: '🥈 3 acertos — Prémio de 3ª categoria!',
-      2: '🥉 2 acertos — Pequeno prémio!',
-      1: 'Apenas 1 acerto. Tenta novamente!',
-      0: 'Sem acertos desta vez. Boa sorte no próximo sorteio!',
-    };
-    setCheckResult(prizes[matches]);
-    if (session) {
-      const updated = recordGeneration(session);
-      setSession(updated);
-    }
   }
 
   function toggleExclude(n: number) {
@@ -569,10 +589,7 @@ export default function App() {
   function toggleFavorite(line: { numbers: number[]; id: number }) {
     const key = line.numbers.join('-');
     const exists = favorites.some(f => f.numbers.join('-') === key);
-    setFavorites(exists
-      ? favorites.filter(f => f.numbers.join('-') !== key)
-      : [...favorites, { numbers: line.numbers, id: Date.now() }]
-    );
+    setFavorites(exists ? favorites.filter(f => f.numbers.join('-') !== key) : [...favorites, { numbers: line.numbers, id: Date.now() }]);
   }
 
   function confirmAge() {
@@ -598,18 +615,16 @@ export default function App() {
     setSession(null);
     setShowGate(true);
     setGateReason('first_visit');
+    track('logout', {});
     showToast('Sessão encerrada.', 'info');
   }
 
   function handleUpgraded(updatedSession: UserSession) {
-    const finalSession = { 
-      ...updatedSession, 
-      syncEnabled: session?.syncEnabled ?? true,
-      lastSync: session?.lastSync ?? null,
-    };
+    const finalSession = { ...updatedSession, syncEnabled: session?.syncEnabled ?? true, lastSync: session?.lastSync ?? null };
     setSession(finalSession);
     setShowUpgrade(false);
     setShowTokenActivation(false);
+    track('purchase', { plan: finalSession.plano, isPremium: true });
     showToast('Parabéns! Agora você é Premium!', 'success');
   }
 
@@ -617,18 +632,15 @@ export default function App() {
     try {
       const result = await checkPremiumStatus(s.email);
       if (result.ok && result.isPremium && result.expiracao) {
-        const plano = result.plano === 'anual' ? 'anual' : 
-                      result.plano === 'vitalicio' ? 'vitalicio' : 'mensal';
+        const plano = result.plano === 'anual' ? 'anual' : result.plano === 'vitalicio' ? 'vitalicio' : 'mensal';
         const premiumSession = activatePremiumFromServer(s, plano, result.expiracao);
         setSession(premiumSession);
         setShowGate(false);
+        track('premium_activated', { plan: plano });
         showToast('Premium activado! Bem-vindo de volta.', 'success');
         return;
       }
-    } catch (error) {
-      console.error('Erro ao verificar premium:', error);
-    }
-    
+    } catch (error) { console.error('Erro ao verificar premium:', error); }
     const syncedSession = { ...s, syncEnabled: true, lastSync: null };
     saveSession(syncedSession);
     setSession(syncedSession);
@@ -646,441 +658,606 @@ export default function App() {
   const header = TAB_HEADERS[tab];
   const daysLeft = session ? Math.max(0, Math.ceil((session.trialExpires - Date.now()) / (1000 * 60 * 60 * 24))) : null;
   const gensUsedToday = session ? (session.lastGenerationDate === todayStr() ? session.generationsToday : 0) : 0;
+  const ultimoSorteio = activeDraw;
+  const temDadosHoje = temSorteioHoje;
+  const performance = getPerformance();
 
   const scrollToSection = (sectionId: string) => {
     setMobileMenuOpen(false);
     const element = document.getElementById(sectionId);
-    if (element) {
-      element.scrollIntoView({ behavior: 'smooth' });
-    }
+    if (element) element.scrollIntoView({ behavior: 'smooth' });
   };
 
-  // Determina o último sorteio disponível
-  const ultimoSorteio = activeDraw;
-  const temDadosHoje = temSorteioHoje;
-
-  // Handler para o ChatBot navegar para qualquer secção
   const handleChatScrollTo = useCallback((sectionId: string) => {
-    if (sectionId === 'premios') {
-      setTab('premios');
-      setTimeout(() => {
-        const element = document.getElementById('premios');
-        if (element) element.scrollIntoView({ behavior: 'smooth' });
-      }, 100);
-      return;
-    }
-    
-    if (sectionId === 'gerador' || sectionId === 'estatisticas' || sectionId === 'historico' || 
-        sectionId === 'diario' || sectionId === 'plano_semanal' || sectionId === 'relatorio') {
-      setTab('loto');
-      setTimeout(() => {
-        const element = document.getElementById(sectionId);
-        if (element) element.scrollIntoView({ behavior: 'smooth' });
-      }, 100);
-      return;
-    }
-    
+    if (sectionId === 'premios') { setTab('premios'); setTimeout(() => { const el = document.getElementById('premios'); if (el) el.scrollIntoView({ behavior: 'smooth' }); }, 100); return; }
+    if (['gerador','estatisticas','historico','diario','plano_semanal','relatorio'].includes(sectionId)) { setTab('loto'); setTimeout(() => { const el = document.getElementById(sectionId); if (el) el.scrollIntoView({ behavior: 'smooth' }); }, 100); return; }
     scrollToSection(sectionId);
-  }, [scrollToSection]);
+  }, []);
 
-  // Handler para o ChatBot abrir modais
   const handleChatOpenModal = useCallback((modal: 'terms' | 'privacy' | 'responsible') => {
     if (modal === 'responsible') setShowResponsible(true);
     if (modal === 'terms') setShowTerms(true);
     if (modal === 'privacy') setShowPrivacy(true);
   }, []);
 
-  return (
-    <div className={`min-h-screen ${fontClass} ${highContrast ? 'high-contrast' : ''}`}>
+  const avgHitsCalc = performance.total > 0 ? (performance.hits2Plus / performance.total) * 5 : 0;
 
-      {/* ── OFFLINE BANNER ── */}
+  // CSS ANIMAÇÕES PREMIUM
+  const premiumAnimations = `
+    @keyframes pulseGreen {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(0.8); }
+    }
+    @keyframes barGrow { from { width: 0 !important; } }
+    @keyframes gradientShift {
+      0%, 100% { opacity: 0.3; transform: translate(-10%, -10%) scale(1); }
+      50% { opacity: 0.6; transform: translate(10%, 10%) scale(1.2); }
+    }
+    @keyframes ballFloat {
+      0%, 100% { transform: translateY(0px); }
+      50% { transform: translateY(-6px); }
+    }
+    @keyframes ballPulse {
+      0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255,215,0,0.7); }
+      50% { transform: scale(1.08); box-shadow: 0 0 0 12px rgba(255,215,0,0); }
+    }
+    @keyframes slotWin {
+      0% { transform: scale(1); filter: brightness(1); }
+      30% { transform: scale(1.2); filter: brightness(1.5); text-shadow: 0 0 20px gold; }
+      70% { transform: scale(0.95); filter: brightness(1.2); }
+      100% { transform: scale(1); filter: brightness(1); }
+    }
+    @keyframes floatParticle {
+      0% { transform: translateY(0) scale(0); opacity: 1; }
+      100% { transform: translateY(-60px) scale(1); opacity: 0; }
+    }
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes shimmer {
+      0% { background-position: -200% center; }
+      100% { background-position: 200% center; }
+    }
+    @keyframes rotateGlow {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    
+    .ball-particle {
+      position: fixed;
+      width: 8px;
+      height: 8px;
+      background: radial-gradient(circle, #ffd700, #ff8c00);
+      border-radius: 50%;
+      pointer-events: none;
+      animation: floatParticle 1s ease-out forwards;
+      z-index: 9999;
+    }
+    
+    .dark-mode { background-color: #0B0F19; color: #E5E7EB; }
+    .dark-mode .bg-white { background-color: #111827 !important; color: #E5E7EB !important; }
+    .dark-mode .bg-neutral-50, .dark-mode .bg-neutral-100 { background-color: #1F2937 !important; }
+    .dark-mode .text-neutral-600, .dark-mode .text-neutral-700 { color: #9CA3AF !important; }
+    .dark-mode .ring-neutral-200 { border-color: rgba(255,255,255,0.1) !important; }
+    .dark-mode .border-neutral-200 { border-color: rgba(255,255,255,0.1) !important; }
+    .bar-grow { animation: barGrow 0.8s ease-out; }
+    .fade-in-up { animation: fadeInUp 0.5s ease-out; }
+    
+    /* Scrollbar premium */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); border-radius: 10px; }
+    ::-webkit-scrollbar-thumb { background: linear-gradient(135deg, #00F5A0, #00C896); border-radius: 10px; }
+    ::-webkit-scrollbar-thumb:hover { background: linear-gradient(135deg, #FFD700, #FFA500); }
+  `;
+
+  return (
+    <div
+      className={`min-h-screen ${fontClass} ${highContrast ? 'high-contrast' : ''}`}
+      style={{ background: '#0B0F19', color: '#E5E7EB', position: 'relative', overflowX: 'hidden' }}
+    >
+      <style>{premiumAnimations}</style>
+      
+      {/* Overlay de gradiente animado para sensação premium */}
+      <div style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        pointerEvents: 'none',
+        zIndex: 0,
+        background: 'radial-gradient(circle at 50% 50%, rgba(0,245,160,0.03), transparent 70%)',
+        animation: 'gradientShift 8s ease infinite',
+      }} />
+
+      {/* ── BANNER OFFLINE ── */}
       {!isOnline && !offlineBannerDismissed && (
-        <div className="fixed top-0 left-0 right-0 z-50 bg-amber-500 text-black text-center py-2 px-4 text-sm flex items-center justify-between">
-          <div className="flex items-center gap-2">
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 50, background: '#F59E0B', color: '#000', textAlign: 'center', padding: '8px 16px', fontSize: '0.875rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <span>📶</span>
             <span>Sem ligação à internet — a mostrar dados da última visita</span>
           </div>
-          <button 
-            onClick={() => setOfflineBannerDismissed(true)}
-            className="ml-4 px-2 py-1 bg-black/20 rounded-lg hover:bg-black/30 transition"
-          >
-            ✕
-          </button>
+          <button onClick={() => setOfflineBannerDismissed(true)} style={{ marginLeft: '16px', padding: '4px 8px', background: 'rgba(0,0,0,0.2)', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>✕</button>
         </div>
       )}
 
-      {/* ── AccessGate ── */}
-      {showGate && (
-        <AccessGate
-          reason={gateReason}
-          onAccess={handleAccess}
-        />
+      {/* ── WIN RATE BANNER ── */}
+      {performance.total > 0 && (
+        <motion.div 
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          style={{ backgroundImage: `linear-gradient(135deg, #fff, ${header.accent})`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text', fontSize: 'clamp(2.5rem, 6vw, 4rem)' }}
+        >
+          <div className="max-w-6xl mx-auto px-4 py-2">
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '8px', fontSize: '0.875rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <span style={{ fontWeight: 700, color: '#00F5A0' }}>🎯 Win Rate Kazola:</span>
+                <motion.span 
+                  key={performance.winRate}
+                  initial={{ scale: 1.2, color: '#FFD700' }}
+                  animate={{ scale: 1, color: '#00F5A0' }}
+                  style={{ fontSize: '1.25rem', fontWeight: 900, color: '#00F5A0' }}
+                >
+                  {performance.winRate}%
+                </motion.span>
+                <span style={{ color: '#6B7280' }}>({performance.hits2Plus}/{performance.total} acertos ≥2)</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <span style={{ fontWeight: 700, color: '#FFD700' }}>💰 Total ganho:</span>
+                <span style={{ fontSize: '1.25rem', fontWeight: 900, color: '#FFD700' }}>{fmtKz(performance.totalWin)}</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <span style={{ fontWeight: 700, color: '#60A5FA' }}>📊 Linhas jogadas:</span>
+                <span style={{ fontSize: '1.25rem', fontWeight: 900, color: '#60A5FA' }}>{performance.linesPlayed}</span>
+              </div>
+            </div>
+          </div>
+        </motion.div>
       )}
 
-      {/* ── Upgrade Modal ── */}
-      {showUpgrade && session && (
-        <UpgradeModal
-          session={session}
-          onUpgraded={handleUpgraded}
-          onClose={() => setShowUpgrade(false)}
-        />
-      )}
+      {/* ── MODAIS GLOBAIS ── */}
+      {showGate && <AccessGate reason={gateReason} onAccess={handleAccess} />}
+      {showUpgrade && session && <UpgradeModal session={session} onUpgraded={handleUpgraded} onClose={() => setShowUpgrade(false)} />}
+      {showTokenActivation && session && <TokenActivation session={session} onUpgraded={handleUpgraded} onClose={() => setShowTokenActivation(false)} />}
 
-      {/* ── Token Activation Modal ── */}
-      {showTokenActivation && session && (
-        <TokenActivation
-          session={session}
-          onUpgraded={handleUpgraded}
-          onClose={() => setShowTokenActivation(false)}
-        />
-      )}
-
-      {/* ── Verificação de idade ── */}
+      {/* ── VERIFICAÇÃO DE IDADE ── */}
       {!ageOk && (
-        <div className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-8 text-center shadow-2xl">
-            <div className="w-16 h-16 rounded-full bg-red-600 text-white text-4xl flex items-center justify-center mx-auto mb-4 font-display font-black">
-              18+
-            </div>
-            <h1 className="font-display font-black text-2xl md:text-3xl mb-2">Verificação de idade</h1>
-            <p className="text-neutral-700 mb-6 leading-relaxed">
-              Este site destina-se apenas a maiores de 18 anos. O <strong>{APP_NAME}</strong> é
-              uma ferramenta educativa de análise estatística. Os sorteios são eventos aleatórios — nenhuma
-              ferramenta garante acertos.
+        <motion.div 
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}
+        >
+          <motion.div 
+            initial={{ scale: 0.9, y: 30 }}
+            animate={{ scale: 1, y: 0 }}
+            style={{ background: '#111827', borderRadius: '24px', maxWidth: '520px', width: '100%', padding: '32px', textAlign: 'center', border: '1px solid rgba(255,255,255,0.1)' }}
+          >
+            <motion.div 
+              animate={{ scale: [1, 1.1, 1], rotate: [0, 5, -5, 0] }}
+              transition={{ duration: 0.5 }}
+              style={{ width: '64px', height: '64px', borderRadius: '50%', background: '#DC2626', color: '#fff', fontSize: '1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', fontWeight: 900 }}
+            >18+</motion.div>
+            <h1 style={{ fontWeight: 900, fontSize: '1.5rem', marginBottom: '8px' }}>Verificação de idade</h1>
+            <p style={{ color: '#9CA3AF', marginBottom: '24px', lineHeight: 1.6 }}>
+              Este site destina-se apenas a maiores de 18 anos. O <strong style={{ color: '#fff' }}>{APP_NAME}</strong> é uma ferramenta educativa de análise estatística. Os sorteios são eventos aleatórios — nenhuma ferramenta garante acertos.
             </p>
-            <div className="flex flex-col sm:flex-row gap-3 justify-center">
-              <button onClick={confirmAge}
-                className="px-6 py-4 rounded-2xl bg-red-600 text-white font-bold text-lg hover:bg-red-700 transition min-h-[56px]">
-                Tenho 18 anos ou mais
-              </button>
-              <a href="https://www.google.com"
-                className="px-6 py-4 rounded-2xl bg-neutral-100 text-neutral-800 font-bold text-lg hover:bg-neutral-200 transition text-center min-h-[56px]">
-                Sair
-              </a>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <motion.button 
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={confirmAge} 
+                style={{ padding: '16px 24px', borderRadius: '16px', background: '#DC2626', color: '#fff', fontWeight: 700, fontSize: '1.125rem', border: 'none', cursor: 'pointer' }}
+              >Tenho 18 anos ou mais</motion.button>
+              <a href="https://www.google.com" style={{ padding: '16px 24px', borderRadius: '16px', background: 'rgba(255,255,255,0.08)', color: '#9CA3AF', fontWeight: 700, fontSize: '1.125rem', textDecoration: 'none', textAlign: 'center' }}>Sair</a>
             </div>
-            <p className="text-xs text-neutral-500 mt-5">
-              Jogos de azar podem causar dependência. Jogue com responsabilidade.
-            </p>
-          </div>
-        </div>
+            <p style={{ fontSize: '0.75rem', color: '#6B7280', marginTop: '20px' }}>Jogos de azar podem causar dependência. Jogue com responsabilidade.</p>
+          </motion.div>
+        </motion.div>
       )}
 
-      {/* ── BARRA DE SESSÃO PROFISSIONAL ── */}
-      <div className="bg-neutral-900 text-white">
+      {/* ── BARRA SUPERIOR ── */}
+      <div style={{ background: '#0B0F19', color: '#fff', borderBottom: '1px solid rgba(255, 255, 255, 0.08)' }}>
         <div className="max-w-6xl mx-auto px-4 py-2 flex flex-wrap items-center justify-between gap-3 text-sm">
-          <div className="flex items-center gap-2">
-            <span aria-hidden>🇦🇴</span>
-            <span className="font-semibold">{APP_NAME} · {APP_SLOGAN} · Angola</span>
-            <span className="hidden md:inline text-neutral-400">· Ferramenta educativa · 18+</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <motion.span 
+              animate={{ rotate: [0, -5, 5, -5, 5, 0] }}
+              transition={{ duration: 0.5, delay: 1 }}
+            >🇦🇴</motion.span>
+            <span style={{ fontWeight: 600 }}>{APP_NAME} · {APP_SLOGAN} · Angola</span>
+            <span className="hidden md:inline" style={{ color: '#6B7280' }}>· Ferramenta educativa · 18+</span>
           </div>
-          <div className="flex items-center gap-4">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <button onClick={() => setDarkMode(!darkMode)} style={{ padding: '6px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', cursor: 'pointer', color: '#fff' }} aria-label="Alternar modo escuro">
+              {darkMode ? '☀️' : '🌙'}
+            </button>
             {session ? (
               <>
-                <span className="text-neutral-300">
+                <span style={{ color: '#D1D5DB', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <motion.span 
+                    animate={{ scale: [1, 1.2, 1] }}
+                    transition={{ repeat: Infinity, duration: 2 }}
+                    style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#00F5A0', display: 'inline-block' }} 
+                  />
                   👤 {session.email}
-                  {!session.isPremium && <span className="ml-2 text-amber-400">· Trial: {daysLeft}d</span>}
-                  {session.isPremium && <span className="ml-2 text-green-400">· PREMIUM ✓</span>}
+                  {!session.isPremium && <span style={{ marginLeft: '8px', color: '#F59E0B' }}>· Trial: {daysLeft}d</span>}
+                  {session.isPremium && <span style={{ marginLeft: '8px', color: '#00F5A0' }}>· PREMIUM ✓</span>}
                 </span>
-                {session && !session.isPremium && (
-                  <button 
-                    onClick={() => setShowTokenActivation(true)}
-                    className="text-xs text-amber-400 hover:text-amber-300 transition-colors"
-                  >
-                    🔑 Inserir token
-                  </button>
+                {!session.isPremium && (
+                  <button onClick={() => setShowTokenActivation(true)} style={{ fontSize: '0.75rem', color: '#F59E0B', background: 'none', border: 'none', cursor: 'pointer' }}>🔑 Inserir token</button>
                 )}
-                <button onClick={handleLogout} className="text-neutral-400 hover:text-white text-xs">Sair</button>
+                <button onClick={handleLogout} style={{ fontSize: '0.75rem', color: '#6B7280', background: 'none', border: 'none', cursor: 'pointer' }}>Sair</button>
               </>
             ) : (
-              <button onClick={() => setShowGate(true)} className="px-3 py-1 bg-amber-500 text-black rounded-lg text-xs font-bold">REGISTAR GRÁTIS</button>
+              <motion.button 
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={() => setShowGate(true)} 
+                style={{ background: 'linear-gradient(135deg, #00F5A0, #00C896)', color: '#0B0F19', padding: '4px 12px', borderRadius: '8px', fontSize: '0.6875rem', fontWeight: 700, border: 'none', cursor: 'pointer' }}
+              >REGISTAR GRÁTIS</motion.button>
             )}
-            <label className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wide text-neutral-300">Letra</span>
-              <select aria-label="Tamanho da letra" value={fontSize}
-                onChange={e => setFontSize(e.target.value as FontSize)}
-                className="bg-neutral-800 text-white rounded-lg px-2 py-1 text-sm">
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#9CA3AF' }}>Letra</span>
+              <select value={fontSize} onChange={e => setFontSize(e.target.value as FontSize)} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', borderRadius: '8px', padding: '4px 8px', fontSize: '0.75rem', border: '1px solid rgba(255,255,255,0.12)' }}>
                 <option value="normal">Normal</option>
                 <option value="large">Grande</option>
                 <option value="xlarge">Muito grande</option>
               </select>
             </label>
-            <button onClick={() => setHighContrast(v => !v)}
-              className="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-sm font-semibold"
-              aria-pressed={highContrast}>
+            <button onClick={() => setHighContrast(v => !v)} style={{ padding: '6px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', cursor: 'pointer', fontSize: '0.6875rem', fontWeight: 700, color: '#fff' }} aria-pressed={highContrast}>
               {highContrast ? 'Desligar' : 'Ligar'} alto contraste
             </button>
           </div>
         </div>
       </div>
 
-      {/* ── Header com LOGO ── */}
-      <header className="bg-white border-b border-neutral-200 sticky top-0 z-30 bg-white/95 backdrop-blur">
+      {/* ── HEADER COM LOGO ── */}
+      <header style={{ background: 'rgba(11, 15, 25, 0.92)', backdropFilter: 'blur(16px)', borderBottom: '1px solid rgba(255, 255, 255, 0.08)', position: 'sticky', top: 0, zIndex: 30, boxShadow: '0 4px 24px rgba(0, 0, 0, 0.4)' }}>
         <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between gap-4">
-          <a href="#inicio" className="flex items-center gap-3">
-            <div className="w-20 h-20 overflow-hidden">
-              <img src={logoImg} alt="KazolaGlow" className="w-full h-full object-cover" />
-            </div>
+          <a href="#inicio" style={{ display: 'flex', alignItems: 'center', gap: '12px', textDecoration: 'none' }}>
+            <motion.div 
+              whileHover={{ scale: 1.05, rotate: 3 }}
+              style={{ borderRadius: '12px', overflow: 'hidden', boxShadow: '0 0 16px rgba(0, 245, 160, 0.15)', width: '80px', height: '80px', flexShrink: 0 }}
+            >
+              <img src={logoImg} alt="KazolaGlow" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            </motion.div>
             <div>
-              <div className="font-display font-black text-xl md:text-2xl leading-tight">{APP_NAME}</div>
-              <div className="text-xs md:text-sm text-neutral-600">
-                {APP_SLOGAN} · Análise estatística de lotaria
-              </div>
+              <motion.div 
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                style={{ fontWeight: 900, fontSize: 'clamp(1.25rem, 3vw, 1.5rem)', background: 'linear-gradient(135deg, #fff, #00F5A0)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}
+              >{APP_NAME}</motion.div>
+              <div style={{ fontSize: '0.75rem', color: 'rgba(156, 163, 175, 0.8)' }}>{APP_SLOGAN} · Análise estatística de lotaria</div>
             </div>
           </a>
 
-          <nav className="hidden md:flex items-center gap-1 font-semibold text-neutral-700">
-            <button onClick={() => { setTab('loto'); scrollToSection('gerador'); }}
-              className="px-3 py-2 rounded-xl hover:bg-neutral-100">
-              Gerador
-            </button>
-            <button onClick={() => { setTab('loto'); scrollToSection('estatisticas'); }}
-              className="px-3 py-2 rounded-xl hover:bg-neutral-100">
-              Estatísticas
-            </button>
-            <button onClick={() => { setTab('loto'); scrollToSection('historico'); }}
-              className="px-3 py-2 rounded-xl hover:bg-neutral-100">
-              Histórico
-            </button>
-            <button onClick={() => setTab('totobola')}
-              className="px-3 py-2 rounded-xl hover:bg-neutral-100">
-              Totobola <span className="ml-1 text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-bold">Em breve</span>
-            </button>
-            <button onClick={() => { setTab('loto'); scrollToSection('aprender'); }}
-              className="px-3 py-2 rounded-xl hover:bg-neutral-100">
-              Aprender
-            </button>
-            <button onClick={() => setShowResponsible(true)}
-              className="ml-2 px-4 py-2 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 transition">
-              🛡️ Jogo responsável
-            </button>
+          <nav className="hidden md:flex items-center gap-1" style={{ fontWeight: 600 }}>
+            {[
+              { label: 'Gerador', action: () => { setTab('loto'); scrollToSection('gerador'); } },
+              { label: 'Estatísticas', action: () => { setTab('loto'); scrollToSection('estatisticas'); } },
+              { label: 'Histórico', action: () => { setTab('loto'); scrollToSection('historico'); } },
+              { label: 'Aprender', action: () => { setTab('loto'); scrollToSection('aprender'); } },
+            ].map(item => (
+              <motion.button 
+                key={item.label} 
+                whileHover={{ scale: 1.05, background: 'rgba(255,255,255,0.08)' }}
+                onClick={item.action}
+                style={{ padding: '8px 12px', borderRadius: '10px', background: 'transparent', border: 'none', color: 'rgba(229, 231, 235, 0.8)', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
+              >{item.label}</motion.button>
+            ))}
+            <motion.button 
+              whileHover={{ scale: 1.05 }}
+              onClick={() => setTab('totobola')}
+              style={{ padding: '8px 12px', borderRadius: '10px', background: 'transparent', border: 'none', color: 'rgba(229, 231, 235, 0.8)', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              Totobola
+              <span style={{ background: 'rgba(255,215,0,0.15)', color: '#FFD700', border: '1px solid rgba(255,215,0,0.3)', borderRadius: '20px', padding: '2px 8px', fontSize: '0.6rem', fontWeight: 700 }}>Em breve</span>
+            </motion.button>
+            <motion.button 
+              whileHover={{ scale: 1.02, y: -1 }}
+              onClick={() => setShowResponsible(true)}
+              style={{ marginLeft: '8px', background: 'linear-gradient(135deg, rgba(0,245,160,0.2), rgba(0,245,160,0.05))', border: '1px solid rgba(0,245,160,0.4)', color: '#00F5A0', padding: '8px 16px', borderRadius: '10px', fontWeight: 700, cursor: 'pointer', transition: 'all 0.2s' }}
+            >🛡️ Jogo responsável</motion.button>
             <PremiumHeaderButton onLoginClick={() => setShowLogin(true)} />
           </nav>
 
-          <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)} className="md:hidden p-2 rounded-lg hover:bg-neutral-100 transition">
-            <svg className="w-6 h-6 text-neutral-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              {mobileMenuOpen ? (
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              ) : (
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-              )}
+          <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            style={{ padding: '8px', borderRadius: '8px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            className="md:hidden"
+          >
+            <svg style={{ width: '24px', height: '24px', color: '#E5E7EB' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              {mobileMenuOpen ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /> : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />}
             </svg>
           </button>
         </div>
 
         {mobileMenuOpen && (
-          <div className="md:hidden bg-white border-t border-neutral-200 py-2 px-4 shadow-lg">
-            <div className="flex flex-col gap-1">
-              <button onClick={() => { setTab('loto'); scrollToSection('gerador'); }} className="px-3 py-3 rounded-xl hover:bg-neutral-100 text-left font-semibold">🎲 Gerador</button>
-              <button onClick={() => { setTab('loto'); scrollToSection('estatisticas'); }} className="px-3 py-3 rounded-xl hover:bg-neutral-100 text-left font-semibold">📊 Estatísticas</button>
-              <button onClick={() => { setTab('loto'); scrollToSection('historico'); }} className="px-3 py-3 rounded-xl hover:bg-neutral-100 text-left font-semibold">📜 Histórico</button>
-              <button onClick={() => setTab('totobola')} className="px-3 py-3 rounded-xl hover:bg-neutral-100 text-left font-semibold">⚽ Totobola <span className="ml-1 text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-bold">Em breve</span></button>
-              <button onClick={() => { setTab('loto'); scrollToSection('aprender'); }} className="px-3 py-3 rounded-xl hover:bg-neutral-100 text-left font-semibold">📖 Aprender</button>
-              <button onClick={() => setShowResponsible(true)} className="px-3 py-3 rounded-xl hover:bg-neutral-100 text-left font-semibold text-emerald-700">🛡️ Jogo responsável</button>
-              <div className="pt-2 border-t border-neutral-100">
+          <motion.div 
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="md:hidden" 
+            style={{ background: 'rgba(11,15,25,0.98)', backdropFilter: 'blur(20px)', borderTop: '1px solid rgba(255,255,255,0.08)', padding: '12px 16px' }}
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              {[
+                { label: '🎲 Gerador', action: () => { setTab('loto'); scrollToSection('gerador'); setMobileMenuOpen(false); } },
+                { label: '📊 Estatísticas', action: () => { setTab('loto'); scrollToSection('estatisticas'); setMobileMenuOpen(false); } },
+                { label: '📜 Histórico', action: () => { setTab('loto'); scrollToSection('historico'); setMobileMenuOpen(false); } },
+                { label: '📖 Aprender', action: () => { setTab('loto'); scrollToSection('aprender'); setMobileMenuOpen(false); } },
+              ].map(item => (
+                <button key={item.label} onClick={item.action} style={{ padding: '12px', borderRadius: '10px', background: 'transparent', border: 'none', color: '#E5E7EB', textAlign: 'left', fontWeight: 600, cursor: 'pointer', width: '100%' }}
+                  onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.06)'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                >{item.label}</button>
+              ))}
+              <button onClick={() => { setTab('totobola'); setMobileMenuOpen(false); }} style={{ padding: '12px', borderRadius: '10px', background: 'transparent', border: 'none', color: '#E5E7EB', textAlign: 'left', fontWeight: 600, cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                ⚽ Totobola
+                <span style={{ background: 'rgba(255,215,0,0.15)', color: '#FFD700', border: '1px solid rgba(255,215,0,0.3)', borderRadius: '20px', padding: '2px 8px', fontSize: '0.6rem', fontWeight: 700 }}>Em breve</span>
+              </button>
+              <button onClick={() => { setShowResponsible(true); setMobileMenuOpen(false); }} style={{ padding: '12px', borderRadius: '10px', background: 'linear-gradient(135deg, rgba(0,245,160,0.15), rgba(0,245,160,0.05))', border: '1px solid rgba(0,245,160,0.3)', color: '#00F5A0', textAlign: 'left', fontWeight: 600, cursor: 'pointer', width: '100%' }}>
+                🛡️ Jogo responsável
+              </button>
+              <div style={{ paddingTop: '8px', marginTop: '4px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                 <PremiumHeaderButton onLoginClick={() => setShowLogin(true)} />
               </div>
             </div>
-          </div>
+          </motion.div>
         )}
       </header>
 
-      {/* ── Disclaimer legal ── */}
-      <div className="bg-amber-50 border-y border-amber-200">
-        <div className="max-w-6xl mx-auto px-4 py-3 flex items-start gap-3 text-amber-900">
-          <span aria-hidden className="text-xl leading-none mt-0.5">⚠️</span>
-          <p className="text-sm md:text-base leading-relaxed">
+      {/* ── AVISO LEGAL ── */}
+      <div style={{ background: 'rgba(255,215,0,0.07)', borderTop: '1px solid rgba(255,215,0,0.2)', borderBottom: '1px solid rgba(255,215,0,0.2)' }}>
+        <div className="max-w-6xl mx-auto px-4 py-3" style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', color: '#FFD700' }}>
+          <span style={{ fontSize: '1.25rem', lineHeight: 1, marginTop: '2px' }}>⚠️</span>
+          <p style={{ fontSize: '0.875rem', lineHeight: 1.6, margin: 0 }}>
             <strong>Importante:</strong> ferramenta <strong>educativa e de entretenimento</strong>,
             <strong> não afiliada</strong> à {OPERATOR} ({CONCESSIONAIRE}) nem ao {REGULATOR}.
-            Os sorteios são <strong>aleatórios e independentes</strong> — nenhum método garante acertos.
-            Jogue com responsabilidade. +18.
+            Os sorteios são <strong>aleatórios e independentes</strong> — nenhum método garante acertos. Jogue com responsabilidade. +18.
           </p>
         </div>
       </div>
 
-      {/* ── BANNER DE ORIGEM DOS DADOS ── */}
-      <div className={`${!apiError && draws.length > 0 ? (temDadosHoje ? 'bg-emerald-50' : 'bg-amber-50') : 'bg-amber-50'} border-b border-neutral-200`}>
-        <div className="max-w-6xl mx-auto px-4 py-2 text-xs md:text-sm flex items-center gap-2 flex-wrap">
-          <span aria-hidden>{!apiError && draws.length > 0 ? (temDadosHoje ? '✅' : '⚠️') : '🕐'}</span>
-          {loadingApi ? (
-            <span>A carregar dados da API oficial…</span>
-          ) : !apiError && draws.length > 0 ? (
-            temDadosHoje ? (
-              <span>✅ Dados reais da API oficial da Lotaria Nacional.</span>
-            ) : (
-              <span>⚠️ Último sorteio disponível: {activeDraw ? formatDate(activeDraw.date) : 'N/A'} — o sorteio de hoje ainda não foi actualizado.</span>
-            )
-          ) : (
-            <span>🕐 A aguardar actualização dos dados.</span>
-          )}
+      {/* ── STATUS DA API ── */}
+      <div style={{ background: !apiError && draws.length > 0 ? (temDadosHoje ? 'rgba(0,245,160,0.05)' : 'rgba(255,215,0,0.05)') : 'rgba(255,215,0,0.05)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+        <div className="max-w-6xl mx-auto px-4 py-2 text-xs md:text-sm flex items-center gap-2 flex-wrap" style={{ color: '#9CA3AF' }}>
+          <motion.span 
+            animate={{ scale: [1, 1.2, 1] }}
+            transition={{ repeat: Infinity, duration: 2 }}
+          >{!apiError && draws.length > 0 ? (temDadosHoje ? '✅' : '⚠️') : '🕐'}</motion.span>
+          {loadingApi ? <span>A carregar dados da API oficial…</span>
+            : !apiError && draws.length > 0
+              ? temDadosHoje ? <span style={{ color: '#00F5A0' }}>✅ Dados reais da API oficial da Lotaria Nacional.</span>
+                : <span>⚠️ Último sorteio disponível: {activeDraw ? formatDate(activeDraw.date) : 'N/A'} — o sorteio de hoje ainda não foi actualizado.</span>
+              : <span>🕐 A aguardar actualização dos dados.</span>
+          }
         </div>
       </div>
 
-      {/* ── Premium Banner ── */}
-      {session && (
-        <PremiumBanner
-          session={session}
-          onUpgrade={() => setShowUpgrade(true)}
-          onLogout={handleLogout}
-          gensUsedToday={gensUsedToday}
-          gensLimitDay={FREE_GENS_DAY}
-        />
-      )}
+      {/* ── PREMIUM BANNER ── */}
+      {session && <PremiumBanner session={session} onUpgrade={() => setShowUpgrade(true)} onLogout={handleLogout} gensUsedToday={gensUsedToday} gensLimitDay={FREE_GENS_DAY} />}
 
-      {/* ── CABEÇALHO HERO ── */}
+      {/* ── HERO ── */}
       <div className="relative overflow-hidden py-8 px-4" style={{ background: header.bg }}>
         <div className="max-w-6xl mx-auto text-center">
-          <div className="inline-block px-3 py-1 rounded-full text-xs font-bold mb-4" style={{ background: header.accent, color: '#000' }}>
-            {header.badge}
+          <motion.div 
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 }}
+            className="fade-in-up" 
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '6px 16px', background: 'rgba(17,24,39,0.7)', backdropFilter: 'blur(12px)', border: '1px solid rgba(0,245,160,0.3)', borderRadius: '999px', marginBottom: '16px' }}
+          >
+            <motion.span 
+              animate={{ scale: [1, 1.2, 1] }}
+              transition={{ repeat: Infinity, duration: 1.5 }}
+              style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#00F5A0', display: 'inline-block' }} 
+            />
+            <span style={{ fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.05em', color: '#00F5A0' }}>⚡ Ecossistema Glow — Inteligência para cada aposta</span>
+          </motion.div>
+          <div>
+            <div className="inline-block px-3 py-1 rounded-full text-xs font-bold mb-4" style={{ background: header.accent, color: '#000' }}>{header.badge}</div>
           </div>
-          <h1 className="font-display font-black text-4xl md:text-6xl mb-3" style={{ background: `linear-gradient(135deg, #fff, ${header.accent})`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+          <motion.h1 
+            initial={{ opacity: 0, y: 30 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3 }}
+            className="font-display font-black mb-3" 
+            style={{ background: `linear-gradient(135deg, #fff, ${header.accent})`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text', fontSize: 'clamp(2.5rem, 6vw, 4rem)' }}
+          >
             {header.title}
-          </h1>
-          <p className="text-neutral-300 text-lg max-w-2xl mx-auto">{header.subtitle}</p>
+          </motion.h1>
+          {(session?.isPremium || premium.isActive) && (
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ delay: 0.4 }}
+              className="fade-in-up" 
+              style={{ animationDelay: '200ms', marginBottom: '12px' }}
+            >
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '4px 12px', background: 'linear-gradient(135deg, rgba(255,215,0,0.2), rgba(255,215,0,0.05))', border: '1px solid rgba(255,215,0,0.4)', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 700, color: '#FFD700' }}>⭐ PREMIUM ACTIVO</span>
+            </motion.div>
+          )}
+          <motion.p 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.5 }}
+            style={{ color: '#D1D5DB', fontSize: '1.125rem', maxWidth: '672px', margin: '0 auto' }}
+          >{header.subtitle}</motion.p>
         </div>
+      </div>
+
+      {/* ── TABS ── */}
+      <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', padding: '24px 16px 0', flexWrap: 'wrap' }}>
+        {(['loto', 'totobola', 'premios'] as Tab[]).map(t => {
+          const labels: Record<Tab, string> = { loto: '🎲 LOTO 5/90', totobola: '⚽ TOTOBOLA', premios: '💰 PRÉMIOS' };
+          const activeColors: Record<Tab, string> = { loto: 'linear-gradient(135deg, #00F5A0, #00C896)', totobola: 'linear-gradient(135deg, #FFD700, #d4a800)', premios: 'linear-gradient(135deg, #FF4B4B, #cc0000)' };
+          const activeGlows: Record<Tab, string> = { loto: '0 0 15px rgba(0,245,160,0.3)', totobola: '0 0 15px rgba(255,215,0,0.3)', premios: '0 0 15px rgba(255,75,75,0.3)' };
+          const isActive = tab === t;
+          return (
+            <motion.button 
+              key={t} 
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => setTab(t)} 
+              style={{ padding: '12px 24px', borderRadius: '40px', fontWeight: 700, fontSize: '0.875rem', transition: 'all 0.2s ease', cursor: 'pointer', ...(isActive ? { background: activeColors[t], color: t === 'premios' ? '#fff' : '#0B0F19', border: 'none', boxShadow: activeGlows[t] } : { background: 'rgba(17,24,39,0.7)', backdropFilter: 'blur(12px)', color: '#9CA3AF', border: '1px solid rgba(255,255,255,0.1)' }) }}
+            >
+              {labels[t]}
+            </motion.button>
+          );
+        })}
       </div>
 
       {/* ── MAIN ── */}
       <main id="inicio" className="max-w-6xl mx-auto px-4 py-8 md:py-12 space-y-8">
 
-        {/* ── BARRA DE CONTROLO ── */}
-        <div className="bg-gradient-to-r from-neutral-50 to-white rounded-2xl p-4 shadow-sm border border-neutral-200">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <span className="text-sm font-bold text-neutral-700">📅 Período de análise:</span>
-              <select value={windowSize} onChange={e => setWindowSize(Number(e.target.value))}
-                className="rounded-xl bg-white ring-1 ring-neutral-200 px-4 py-2 font-semibold text-sm">
+        {/* Selector de período */}
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          style={{ background: 'rgba(17,24,39,0.6)', borderRadius: '16px', padding: '16px', border: '1px solid rgba(255,255,255,0.08)' }}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }} className="sm:flex-row sm:items-center sm:justify-between">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <span style={{ fontSize: '0.875rem', fontWeight: 700, color: '#D1D5DB' }}>📅 Período de análise:</span>
+              <select value={windowSize} onChange={e => setWindowSize(Number(e.target.value))} style={{ borderRadius: '12px', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', padding: '8px 16px', fontWeight: 600, fontSize: '0.875rem', color: '#fff' }}>
                 <option value={20}>Últimos 20 sorteios</option>
                 <option value={60}>Últimos 60 sorteios</option>
                 <option value={120}>Últimos 120 sorteios</option>
                 <option value={draws.length}>Todos ({draws.length})</option>
               </select>
             </div>
-            <div className="text-xs text-neutral-500">
-              📊 Os dados abaixo refletem os últimos {Math.min(windowSize, draws.length)} sorteios
-            </div>
+            <div style={{ fontSize: '0.75rem', color: '#6B7280' }}>📊 Os dados abaixo refletem os últimos {Math.min(windowSize, draws.length)} sorteios</div>
           </div>
-        </div>
+        </motion.div>
 
-        {/* ── ÚLTIMO SORTEIO ── */}
+        {/* Último sorteio - COM OS 4 CARDS ATUALIZADOS (GLASS + GLOW) E CHROMEBALLS PREMIUM */}
         {ultimoSorteio && (
-          <Card
-            title={`${temDadosHoje ? 'Último sorteio' : 'Último sorteio disponível'} · ${formatDate(ultimoSorteio.date)}${ultimoSorteio.time ? ' · ' + ultimoSorteio.time : ''}`}
-            subtitle={temDadosHoje 
-              ? `Concurso ${ultimoSorteio.id}${ultimoSorteio.session ? ' · ' + (ultimoSorteio.session === 'fezada' ? 'Fezada' : ultimoSorteio.session === 'aqueceu' ? 'Aqueceu' : ultimoSorteio.session === 'kazola' ? 'Kazola' : 'Eskebra') : ''} — ${PICK_SIZE} números de 1 a ${TOTAL_NUMBERS}`
-              : `⚠️ Resultado do último sorteio registado (${formatDate(ultimoSorteio.date)}). O sorteio de hoje ainda não está disponível na base de dados.`}
-            icon={<span>📅</span>}
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ delay: 0.1 }}
           >
-            <div className="flex flex-wrap items-center gap-3 justify-center md:justify-start py-4">
-              {ultimoSorteio.numbers.map((n, i) => (
-                <Ball key={n} n={n} animated size="lg" delay={i * 120} />
-              ))}
-            </div>
-            
-            {!temDadosHoje && (
-              <div className="mb-4 p-4 rounded-xl bg-amber-100 border border-amber-300 text-amber-800 text-sm text-center">
-                <span className="font-bold block mb-1">⏳ Dados históricos</span>
-                Estes são os números do último sorteio disponível na nossa base de dados. 
-                O resultado do sorteio de hoje será exibido assim que a Lotaria Nacional o disponibilizar.
+            <Card
+              title={`${temDadosHoje ? 'Último sorteio' : 'Último sorteio disponível'} · ${formatDate(ultimoSorteio.date)}${ultimoSorteio.time ? ' · ' + ultimoSorteio.time : ''}`}
+              subtitle={temDadosHoje
+                ? `Concurso ${ultimoSorteio.id}${ultimoSorteio.session ? ' · ' + (ultimoSorteio.session === 'fezada' ? 'Fezada' : ultimoSorteio.session === 'aqueceu' ? 'Aqueceu' : ultimoSorteio.session === 'kazola' ? 'Kazola' : 'Eskebra') : ''} — ${PICK_SIZE} números de 1 a ${TOTAL_NUMBERS}`
+                : `⚠️ Resultado do último sorteio registado (${formatDate(ultimoSorteio.date)}). O sorteio de hoje ainda não está disponível.`}
+              icon={<span>📅</span>}
+            >
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '12px', justifyContent: 'center', padding: '16px 0' }}>
+                {ultimoSorteio.numbers.map((n, i) => (
+                  <ChromeBall 
+                    key={n} 
+                    n={n} 
+                    animated 
+                    size="lg" 
+                    delay={i * 120} 
+                    variant="premium"
+                    glowing={true}
+                  />
+                ))}
               </div>
-            )}
-            
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">
-              <div className="p-4 rounded-2xl bg-neutral-900 text-white text-center">
-                <div className="text-xs uppercase text-neutral-300">Prémio máximo</div>
-                <div className="text-lg md:text-xl font-display font-black">{fmtKz(MAX_PRIZE_KZ)}</div>
-                <div className="text-xs text-neutral-400 mt-1">Opção 5 × {fmtKz(MAX_STAKE_KZ)}</div>
-              </div>
-              <div className="p-4 rounded-2xl bg-white ring-1 ring-neutral-200 text-center">
-                <div className="text-xs uppercase text-neutral-500">Sorteios analisados</div>
-                <div className="text-lg md:text-xl font-display font-black">{draws.length}</div>
-              </div>
-              <div className="p-4 rounded-2xl bg-white ring-1 ring-neutral-200 text-center">
-                <div className="text-xs uppercase text-neutral-500">Probabilidade (5 certos)</div>
-                <div className="text-lg md:text-xl font-display font-black">
-                  1 em {probs.five.toLocaleString('pt-AO')}
+              {!temDadosHoje && (
+                <div style={{ marginBottom: '16px', padding: '16px', borderRadius: '12px', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', color: '#F59E0B', fontSize: '0.875rem', textAlign: 'center' }}>
+                  <span style={{ fontWeight: 700, display: 'block', marginBottom: '4px' }}>⏳ Dados históricos</span>
+                  Estes são os números do último sorteio disponível. O resultado de hoje será exibido assim que a Lotaria Nacional o disponibilizar.
                 </div>
+              )}
+              
+              {/* 4 CARDS ATUALIZADOS COM GLASS E GLOW (CORES CORRETAS) */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px', marginTop: '8px' }} className="md:grid-cols-4">
+                
+                {/* 🏆 Prémio máximo - Ícone dourado */}
+                <motion.div 
+                  whileHover={{ y: -2, scale: 1.02 }}
+                  style={{ background: 'rgba(17,24,39,0.7)', backdropFilter: 'blur(12px)', border: '1px solid rgba(255,215,0,0.4)', borderRadius: '16px', padding: '16px', textAlign: 'center', transition: 'all 0.2s ease' }}
+                >
+                  <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#FFD700' }}>🏆 Prémio máximo</div>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#FFD700', textShadow: '0 0 8px rgba(255,215,0,0.6)', marginTop: '4px' }}>{fmtKz(MAX_PRIZE_KZ)}</div>
+                  <div style={{ fontSize: '0.7rem', color: '#6B7280', marginTop: '4px' }}>Opção 5 × {fmtKz(MAX_STAKE_KZ)}</div>
+                </motion.div>
+
+                {/* 📊 Sorteios analisados - Ícone verde */}
+                <motion.div 
+                  whileHover={{ y: -2, scale: 1.02 }}
+                  style={{ background: 'rgba(17,24,39,0.7)', backdropFilter: 'blur(12px)', border: '1px solid rgba(0,245,160,0.4)', borderRadius: '16px', padding: '16px', textAlign: 'center', transition: 'all 0.2s ease' }}
+                >
+                  <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#00F5A0' }}>📊 Sorteios analisados</div>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#00F5A0', textShadow: '0 0 8px rgba(0,245,160,0.6)', marginTop: '4px' }}>{draws.length}</div>
+                  <div style={{ fontSize: '0.7rem', color: '#6B7280', marginTop: '4px' }}>base histórica</div>
+                </motion.div>
+
+                {/* 🎯 Probabilidade - Ícone azul */}
+                <motion.div 
+                  whileHover={{ y: -2, scale: 1.02 }}
+                  style={{ background: 'rgba(17,24,39,0.7)', backdropFilter: 'blur(12px)', border: '1px solid rgba(96,165,250,0.4)', borderRadius: '16px', padding: '16px', textAlign: 'center', transition: 'all 0.2s ease' }}
+                >
+                  <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#60A5FA' }}>🎯 Probabilidade (5 certos)</div>
+                  <div style={{ fontSize: '1rem', fontWeight: 800, color: '#60A5FA', textShadow: '0 0 8px rgba(96,165,250,0.6)', marginTop: '4px' }}>1 em {probs.five.toLocaleString('pt-AO')}</div>
+                  <div style={{ fontSize: '0.7rem', color: '#6B7280', marginTop: '4px' }}>C(90,5) = {probs.total.toLocaleString('pt-AO')}</div>
+                </motion.div>
+
+                {/* 💰 Aposta - Ícone vermelho */}
+                <motion.div 
+                  whileHover={{ y: -2, scale: 1.02 }}
+                  style={{ background: 'rgba(17,24,39,0.7)', backdropFilter: 'blur(12px)', border: '1px solid rgba(255,75,75,0.4)', borderRadius: '16px', padding: '16px', textAlign: 'center', transition: 'all 0.2s ease' }}
+                >
+                  <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#FF4B4B' }}>💰 Aposta</div>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#FF4B4B', textShadow: '0 0 8px rgba(255,75,75,0.6)', marginTop: '4px' }}>{fmtKz(MIN_STAKE_KZ)}–{fmtKz(MAX_STAKE_KZ)}</div>
+                  <div style={{ fontSize: '0.7rem', color: '#6B7280', marginTop: '4px' }}>mínimo · máximo</div>
+                </motion.div>
               </div>
-              <div className="p-4 rounded-2xl bg-white ring-1 ring-neutral-200 text-center">
-                <div className="text-xs uppercase text-neutral-500">Aposta</div>
-                <div className="text-lg md:text-xl font-display font-black">
-                  {fmtKz(MIN_STAKE_KZ)}–{fmtKz(MAX_STAKE_KZ)}
-                </div>
-              </div>
-            </div>
-            <p className="mt-4 text-sm text-neutral-600">
-              Operado pela {OPERATOR} ({CONCESSIONAIRE}), regulado pelo {REGULATOR} ao abrigo
-              da {LEGAL_REF} e {DECREE_REF}.{' '}
-              <a href={WEBSITE} target="_blank" rel="noopener noreferrer"
-                className="underline hover:text-red-600">
-                Site oficial
-              </a>
-            </p>
-          </Card>
+
+              <p style={{ marginTop: '16px', fontSize: '0.875rem', color: '#6B7280' }}>
+                Operado pela {OPERATOR} ({CONCESSIONAIRE}), regulado pelo {REGULATOR} ao abrigo da {LEGAL_REF} e {DECREE_REF}.{' '}
+                <a href={WEBSITE} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'underline', color: '#60A5FA' }}>Site oficial</a>
+              </p>
+            </Card>
+          </motion.div>
         )}
 
-        {/* ── Tabs ── */}
-        <div className="flex gap-3 border-b border-neutral-200 pb-0">
-          <button
-            onClick={() => setTab('loto')}
-            className={`px-6 py-3 rounded-t-xl font-bold text-base transition-all duration-200 ${
-              tab === 'loto'
-                ? 'bg-red-600 text-white shadow-lg -translate-y-0.5'
-                : 'bg-neutral-100 text-neutral-700 hover:bg-red-100'
-            }`}>
-            🎲 LOTO 5/90
-          </button>
-          <button
-            onClick={() => setTab('totobola')}
-            className={`px-6 py-3 rounded-t-xl font-bold text-base transition-all duration-200 ${
-              tab === 'totobola'
-                ? 'bg-green-600 text-white shadow-lg -translate-y-0.5'
-                : 'bg-neutral-100 text-neutral-700 hover:bg-green-100'
-            }`}>
-            ⚽ TOTOBOLA
-          </button>
-          <button
-            onClick={() => setTab('premios')}
-            className={`px-6 py-3 rounded-t-xl font-bold text-base transition-all duration-200 ${
-              tab === 'premios'
-                ? 'bg-blue-600 text-white shadow-lg -translate-y-0.5'
-                : 'bg-neutral-100 text-neutral-700 hover:bg-blue-100'
-            }`}>
-            💰 PRÉMIOS
-          </button>
-        </div>
-
-        {/* ═══════════ TAB: LOTO ═══════════════════════════════════ */}
+        {/* ── TAB LOTO ── */}
         {tab === 'loto' && (
           <>
-            {/* Gerador com id para navegação */}
+            {/* MetricsStrip */}
+            {performance.total > 0 && (
+              <MetricsStrip
+                totalSessions={performance.total}
+                winRate={Number(performance.winRate)}
+                avgHits={avgHitsCalc}
+                totalReturn={performance.totalWin}
+              />
+            )}
+
             <div id="gerador">
               <section className="grid lg:grid-cols-5 gap-6">
                 <Card
                   title="Gerador inteligente"
-                  subtitle={`${!session ? '⚠️ Registe-se para começar a gerar!' : (!canGenerateTodayCheck ? '⚠️ Limite diário atingido. Volte amanhã ou adquira Premium.' : 'Escolha um método e gere combinações para estudo. Nenhuma garante vitória.')}`}
+                  subtitle={!session ? '⚠️ Registe-se para começar a gerar!' : !canGenerateTodayCheck ? '⚠️ Limite diário atingido. Volte amanhã ou adquira Premium.' : 'Escolha um método e gere combinações para estudo. Nenhuma garante vitória.'}
                   icon={<span>🎲</span>}
                   className="lg:col-span-3"
                 >
                   <div className="space-y-5">
+                    {/* MethodCards */}
                     <div>
-                      <label className="block text-sm font-bold mb-2">Método de geração</label>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {availableStrategies.map((key) => {
-                          const config: Record<string, { label: string; hint: string }> = {
-                            equilibrado: { label: 'Equilibrado (recomendado)', hint: 'Um número por cada faixa de 18 (1-18, 19-36…).' },
-                            aleatorio: { label: 'Aleatório puro', hint: 'Cada combinação tem exatamente a mesma probabilidade.' },
-                            frequencia: { label: 'Frequência histórica', hint: 'Pondera pelos números mais frequentes recentes. 🔒 Premium' },
-                            montecarlo: { label: 'Monte Carlo', hint: 'Pesos históricos + ruído gaussiano. 🔒 Premium' },
-                          };
+                      <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, marginBottom: '8px', color: '#D1D5DB' }}>Método de geração</label>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
+                        {availableStrategies.map(key => {
+                          const cfg = METHOD_CONFIG[key];
                           const isLocked = !(session?.isPremium || premium.isActive) && (key === 'frequencia' || key === 'montecarlo');
                           return (
-                            <button key={key} onClick={() => !isLocked && setStrategy(key as GenerationStrategy)}
-                              className={`text-left rounded-2xl p-4 ring-2 transition min-h-[88px] ${isLocked ? 'opacity-60 cursor-not-allowed' : ''} ${
-                                strategy === key ? 'ring-red-600 bg-red-50' : 'ring-neutral-200 bg-white hover:ring-neutral-300'
-                              }`}>
-                              <div className="font-display font-bold text-base md:text-lg">{config[key].label}</div>
-                              <div className="text-xs md:text-sm text-neutral-600 mt-1">{config[key].hint}</div>
-                            </button>
+                            <MethodCard
+                              key={key}
+                              id={key as MethodId}
+                              name={cfg.name}
+                              description={cfg.description}
+                              icon={cfg.icon}
+                              color={cfg.color}
+                              premium={cfg.premium}
+                              selected={strategy === key}
+                              locked={isLocked}
+                              onSelect={(id) => setStrategy(id as GenerationStrategy)}
+                            />
                           );
                         })}
                       </div>
@@ -1088,21 +1265,16 @@ export default function App() {
 
                     <div className="grid sm:grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-sm font-bold mb-2">Linhas: <strong>{lines}</strong></label>
-                        <input type="range" min={1}
-                          max={(session?.isPremium || premium.isActive) ? 10 : 1}
-                          value={lines}
-                          onChange={e => setLines(Number(e.target.value))}
-                          className="w-full accent-red-600" />
-                        <div className="text-xs text-neutral-500 mt-1">
+                        <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, marginBottom: '8px', color: '#D1D5DB' }}>Linhas: <strong>{lines}</strong></label>
+                        <input type="range" min={1} max={(session?.isPremium || premium.isActive) ? 10 : 1} value={lines} onChange={e => setLines(Number(e.target.value))} style={{ width: '100%', accentColor: '#00F5A0' }} />
+                        <div style={{ fontSize: '0.75rem', color: '#6B7280', marginTop: '4px' }}>
                           1 a {(session?.isPremium || premium.isActive) ? 10 : 1} combinações por geração
-                          {!(session?.isPremium || premium.isActive) && <span className="ml-2 text-amber-600">🔒 Premium permite até 10</span>}
+                          {!(session?.isPremium || premium.isActive) && <span style={{ marginLeft: '8px', color: '#F59E0B' }}>🔒 Premium permite até 10</span>}
                         </div>
                       </div>
                       <div>
-                        <label className="block text-sm font-bold mb-2">Par / Ímpar</label>
-                        <select value={parity} onChange={e => setParity(e.target.value as Filter['parityBias'])}
-                          className="w-full rounded-2xl bg-white ring-1 ring-neutral-200 p-3 font-semibold min-h-[52px]">
+                        <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, marginBottom: '8px', color: '#D1D5DB' }}>Par / Ímpar</label>
+                        <select value={parity} onChange={e => setParity(e.target.value as Filter['parityBias'])} style={{ width: '100%', borderRadius: '16px', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', padding: '12px', fontWeight: 600, minHeight: '52px', color: '#fff' }}>
                           <option value="nenhum">Qualquer combinação</option>
                           <option value="equilibrado">Equilibrado (2P/3I ou 3P/2I)</option>
                           <option value="par">Maioria par</option>
@@ -1112,20 +1284,24 @@ export default function App() {
                     </div>
 
                     <div>
-                      <label className="block text-sm font-bold mb-2">
+                      <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, marginBottom: '8px', color: '#D1D5DB' }}>
                         Excluir números — toque para marcar/desmarcar
-                        {exclude.length > 0 && <span className="ml-2 text-red-600">({exclude.length} excluídos)</span>}
+                        {exclude.length > 0 && <span style={{ marginLeft: '8px', color: '#EF4444' }}>({exclude.length} excluídos)</span>}
                       </label>
-                      <div className="grid grid-cols-10 gap-1">
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(10, 1fr)', gap: '4px' }}>
                         {Array.from({ length: TOTAL_NUMBERS }, (_, i) => i + 1).map(n => {
                           const off = exclude.includes(n);
                           return (
-                            <button key={n} onClick={() => toggleExclude(n)} aria-pressed={off}
-                              className={`aspect-square rounded-lg font-bold text-[10px] md:text-xs transition ${
-                                off ? 'bg-neutral-900 text-white line-through' : 'bg-white ring-1 ring-neutral-200 hover:ring-neutral-400'
-                              }`}>
+                            <motion.button 
+                              key={n} 
+                              whileHover={{ scale: 1.05 }}
+                              whileTap={{ scale: 0.95 }}
+                              onClick={() => toggleExclude(n)} 
+                              aria-pressed={off}
+                              style={{ aspectRatio: '1', borderRadius: '8px', fontWeight: 700, fontSize: '0.625rem', transition: 'all 0.15s', background: off ? '#1F2937' : 'rgba(255,255,255,0.08)', border: off ? '1px solid rgba(255,255,255,0.2)' : '1px solid rgba(255,255,255,0.1)', color: off ? '#6B7280' : '#D1D5DB', textDecoration: off ? 'line-through' : 'none', cursor: 'pointer' }}
+                            >
                               {String(n).padStart(2, '0')}
-                            </button>
+                            </motion.button>
                           );
                         })}
                       </div>
@@ -1139,165 +1315,170 @@ export default function App() {
                     )}
 
                     {(!session || !canGenerateTodayCheck) && (
-                      <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-center">
-                        <span className="text-amber-800">
-                          {!session ? '⚠️ Registe-se com email para começar a gerar!' : '⚠️ Limite diário atingido! Apenas 1 geração por dia para utilizadores gratuitos.'}
-                        </span>
+                      <div style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: '16px', padding: '16px', textAlign: 'center', color: '#F59E0B' }}>
+                        {!session ? '⚠️ Registe-se com email para começar a gerar!' : '⚠️ Limite diário atingido! Apenas 1 geração por dia para utilizadores gratuitos.'}
                       </div>
                     )}
 
-                    <div className="flex flex-col sm:flex-row gap-3 pt-1">
-                      <button onClick={onGenerate} disabled={!session || !canGenerateTodayCheck}
-                        className={`flex-1 min-h-[60px] px-6 py-4 rounded-2xl font-display font-black text-lg shadow-md transition ${
-                          !session || !canGenerateTodayCheck
-                            ? 'bg-neutral-400 cursor-not-allowed'
-                            : 'bg-red-600 hover:bg-red-700 text-white'
-                        }`}>
-                        🎯 Gerar {(session?.isPremium || premium.isActive) ? lines : 1} combinação{lines > 1 ? 'ões' : ''}
-                      </button>
-                      <button onClick={() => setShowHelp(true)}
-                        className="min-h-[60px] px-5 py-4 rounded-2xl bg-neutral-900 hover:bg-black text-white font-bold text-lg transition">
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', paddingTop: '4px' }} className="sm:flex-row">
+                      <motion.button 
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                        onClick={onGenerate} 
+                        disabled={!session || !canGenerateTodayCheck}
+                        style={{ flex: 1, minHeight: '60px', padding: '16px 24px', borderRadius: '16px', fontWeight: 900, fontSize: '1.125rem', transition: 'all 0.2s', cursor: !session || !canGenerateTodayCheck ? 'not-allowed' : 'pointer', background: !session || !canGenerateTodayCheck ? 'rgba(255,255,255,0.1)' : 'linear-gradient(135deg, #00F5A0, #00C896)', color: !session || !canGenerateTodayCheck ? '#6B7280' : '#0B0F19', border: 'none', boxShadow: !session || !canGenerateTodayCheck ? 'none' : '0 0 20px rgba(0,245,160,0.3)' }}
+                      >
+                        ⚡ Gerar {(session?.isPremium || premium.isActive) ? lines : 1} combinação{lines > 1 ? 'ões' : ''}
+                      </motion.button>
+                      <button onClick={() => setShowHelp(true)} style={{ minHeight: '60px', padding: '16px 20px', borderRadius: '16px', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', color: '#D1D5DB', fontWeight: 700, fontSize: '1.125rem', cursor: 'pointer' }}>
                         Como funciona?
                       </button>
                     </div>
 
                     {session && !premium.isActive && !session.isPremium && (
-                      <div className="text-xs text-center text-neutral-500">
-                        {canGenerateTodayCheck
-                          ? `✅ Geração disponível hoje (1/1). Amanhã poderá gerar novamente. Trial restante: ${daysLeft} dias.`
-                          : `⏳ Próxima geração disponível amanhã. Adquira Premium para gerações ilimitadas.`}
+                      <div style={{ fontSize: '0.75rem', textAlign: 'center', color: '#6B7280' }}>
+                        {canGenerateTodayCheck ? `✅ Geração disponível hoje (1/1). Trial restante: ${daysLeft} dias.` : `⏳ Próxima geração disponível amanhã. Adquira Premium para gerações ilimitadas.`}
                       </div>
                     )}
                   </div>
                 </Card>
 
-                <Card title="Combinações geradas"
-                  subtitle={generated.length ? 'Toque no ♡ para guardar nos favoritos.' : 'As suas combinações aparecerão aqui.'}
-                  icon={<span>✨</span>} className="lg:col-span-2">
+                {/* Combinações geradas + Speedometer */}
+                <Card title="Combinações geradas" subtitle={generated.length ? 'Toque no ♡ para guardar nos favoritos.' : 'As suas combinações aparecerão aqui.'} icon={<span>✨</span>} className="lg:col-span-2">
+                  {/* Speedometer */}
+                  <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
+                    <Speedometer hits={speedometerHits} animateKey={speedometerKey} size={220} />
+                  </div>
+
                   {generated.length === 0 ? (
-                    <div className="py-10 text-center text-neutral-500">
-                      <div className="text-5xl mb-3">🎟️</div>
-                      <p className="font-semibold">Sem combinações ainda.</p>
-                      <p className="text-sm mt-1">Configure as opções e toque em "Gerar".</p>
-                      {!(session?.isPremium || premium.isActive) && (
-                        <p className="text-xs text-amber-600 mt-3">🔒 Utilizadores gratuitos: máximo 1 linha por geração</p>
-                      )}
+                    <div style={{ padding: '24px 0', textAlign: 'center', color: '#6B7280' }}>
+                      <div style={{ fontSize: '3rem', marginBottom: '12px' }}>🎟️</div>
+                      <p style={{ fontWeight: 600 }}>Sem combinações ainda.</p>
+                      <p style={{ fontSize: '0.875rem', marginTop: '4px' }}>Configure as opções e toque em "Gerar".</p>
+                      {!(session?.isPremium || premium.isActive) && <p style={{ fontSize: '0.75rem', color: '#F59E0B', marginTop: '12px' }}>🔒 Utilizadores gratuitos: máximo 1 linha por geração</p>}
                     </div>
                   ) : (
-                    <ul className="space-y-3">
-                      {generated.map((g, idx) => {
-                        const saved = favorites.some(f => f.numbers.join('-') === g.numbers.join('-'));
-                        return (
-                          <li key={g.id} className="rounded-2xl ring-1 ring-neutral-200 p-3 bg-white fade-in">
-                            <div className="flex items-center justify-between mb-2">
-                              <span className="text-sm font-bold text-neutral-700">Linha {idx + 1}</span>
-                              <button onClick={() => toggleFavorite(g)} aria-label="Guardar nos favoritos"
-                                className={`w-11 h-11 rounded-full text-2xl transition ${saved ? 'bg-red-600 text-white' : 'bg-neutral-100 hover:bg-neutral-200'}`}>
-                                {saved ? '♥' : '♡'}
-                              </button>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              {g.numbers.map(n => <Ball key={n} n={n} size="sm" />)}
-                            </div>
-                          </li>
-                        );
-                      })}
-                    </ul>
+                    <>
+                      <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        {generated.map((g, idx) => {
+                          const saved = favorites.some(f => f.numbers.join('-') === g.numbers.join('-'));
+                          return (
+                            <motion.li 
+                              key={g.id} 
+                              initial={{ opacity: 0, x: -20 }}
+                              animate={{ opacity: 1, x: 0 }}
+                              transition={{ delay: idx * 0.1 }}
+                              style={{ borderRadius: '16px', border: '1px solid rgba(255,255,255,0.08)', padding: '12px', background: 'rgba(255,255,255,0.03)' }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                                <span style={{ fontSize: '0.875rem', fontWeight: 700, color: '#9CA3AF' }}>Linha {idx + 1}</span>
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                  <motion.button 
+                                    whileHover={{ scale: 1.1 }}
+                                    whileTap={{ scale: 0.9 }}
+                                    onClick={() => handleShareCombination(g.numbers)} 
+                                    style={{ width: '44px', height: '44px', borderRadius: '50%', background: '#059669', color: '#fff', fontSize: '1.125rem', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }} 
+                                    aria-label="Partilhar"
+                                  >📤</motion.button>
+                                  <motion.button 
+                                    whileHover={{ scale: 1.1 }}
+                                    whileTap={{ scale: 0.9 }}
+                                    onClick={() => toggleFavorite(g)} 
+                                    aria-label="Guardar nos favoritos" 
+                                    style={{ width: '44px', height: '44px', borderRadius: '50%', fontSize: '1.5rem', border: 'none', cursor: 'pointer', background: saved ? '#DC2626' : 'rgba(255,255,255,0.1)', color: saved ? '#fff' : '#9CA3AF' }}
+                                  >
+                                    {saved ? '♥' : '♡'}
+                                  </motion.button>
+                                </div>
+                              </div>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px' }}>
+                                {g.numbers.map((n, i) => (
+                                  <ChromeBall 
+                                    key={n} 
+                                    n={n} 
+                                    size="sm" 
+                                    delay={i * 50}
+                                    animated
+                                  />
+                                ))}
+                              </div>
+                            </motion.li>
+                          );
+                        })}
+                      </ul>
+                      {activeDraw && (
+                        <motion.button 
+                          whileHover={{ scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                          onClick={checkWin} 
+                          style={{ width: '100%', marginTop: '16px', padding: '12px', borderRadius: '12px', background: 'linear-gradient(135deg, #059669, #047857)', color: '#fff', fontWeight: 700, border: 'none', cursor: 'pointer' }}
+                        >
+                          ✅ Conferir com sorteio de {formatDate(activeDraw.date)}
+                        </motion.button>
+                      )}
+                    </>
                   )}
                 </Card>
               </section>
             </div>
 
-            {/* Diário de Apostas com id */}
+            {/* Diário de Apostas */}
             <div id="diario">
               {session?.isPremium || premium.isActive ? (
-                <DiarioApostas session={session!} onSessionUpdate={handleSessionUpdate} />
+                <DiarioApostas session={session!} onSessionUpdate={handleSessionUpdate} draws={sorteios} />
               ) : (
                 <Card title="📓 Diário de Apostas" icon={<span>📓</span>}>
-                  <div className="text-center py-6 text-neutral-500">
+                  <div style={{ textAlign: 'center', padding: '24px', color: '#6B7280' }}>
                     🔒 Disponível apenas para utilizadores Premium.
-                    <button onClick={() => setShowUpgrade(true)} className="block mx-auto mt-3 px-4 py-2 bg-amber-500 text-black rounded-xl font-bold text-sm">
-                      Upgrade Premium
-                    </button>
+                    <button onClick={() => setShowUpgrade(true)} style={{ display: 'block', margin: '12px auto 0', padding: '8px 16px', background: '#F59E0B', color: '#000', borderRadius: '12px', fontWeight: 700, fontSize: '0.875rem', border: 'none', cursor: 'pointer' }}>Upgrade Premium</button>
                   </div>
                 </Card>
               )}
             </div>
 
-            {/* Plano Semanal com id */}
+            {/* Plano Semanal */}
             <div id="plano_semanal">
               {session?.isPremium || premium.isActive ? (
-                <PlanoSemanal 
-                  session={session!}
-                  weights={weights}
-                  hotCold={hotCold}
-                  gaps={gaps}
-                  draws={draws}
-                  onSessionUpdate={handleSessionUpdate}
-                />
+                <PlanoSemanal session={session!} weights={weights} hotCold={hotCold} gaps={gaps} draws={draws} onSessionUpdate={handleSessionUpdate} />
               ) : (
                 <Card title="📅 Plano Semanal" icon={<span>📅</span>}>
-                  <div className="text-center py-6 text-neutral-500">
+                  <div style={{ textAlign: 'center', padding: '24px', color: '#6B7280' }}>
                     🔒 Disponível apenas para utilizadores Premium.
-                    <button onClick={() => setShowUpgrade(true)} className="block mx-auto mt-3 px-4 py-2 bg-amber-500 text-black rounded-xl font-bold text-sm">
-                      Upgrade Premium
-                    </button>
+                    <button onClick={() => setShowUpgrade(true)} style={{ display: 'block', margin: '12px auto 0', padding: '8px 16px', background: '#F59E0B', color: '#000', borderRadius: '12px', fontWeight: 700, fontSize: '0.875rem', border: 'none', cursor: 'pointer' }}>Upgrade Premium</button>
                   </div>
                 </Card>
               )}
             </div>
 
-            {/* Relatório Mensal com id */}
+            {/* Relatório Mensal */}
             <div id="relatorio">
               {session?.isPremium || premium.isActive ? (
                 <RelatorioMensal session={session!} />
               ) : (
                 <Card title="📊 Relatório Mensal" icon={<span>📊</span>}>
-                  <div className="text-center py-6 text-neutral-500">
+                  <div style={{ textAlign: 'center', padding: '24px', color: '#6B7280' }}>
                     🔒 Disponível apenas para utilizadores Premium.
-                    <button onClick={() => setShowUpgrade(true)} className="block mx-auto mt-3 px-4 py-2 bg-amber-500 text-black rounded-xl font-bold text-sm">
-                      Upgrade Premium
-                    </button>
+                    <button onClick={() => setShowUpgrade(true)} style={{ display: 'block', margin: '12px auto 0', padding: '8px 16px', background: '#F59E0B', color: '#000', borderRadius: '12px', fontWeight: 700, fontSize: '0.875rem', border: 'none', cursor: 'pointer' }}>Upgrade Premium</button>
                   </div>
                 </Card>
               )}
             </div>
 
-            {/* Simulador de Orçamento */}
+            {/* Simulador de apostas */}
             <Card title="💰 Simulador de apostas" icon={<span>🎯</span>}>
               <div className="space-y-4">
                 <div className="grid sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="text-sm font-bold">Orçamento por sessão (Kz)</label>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className="text-neutral-500">Kz</span>
-                      <input
-                        type="number"
-                        min={50}
-                        max={10000}
-                        step={50}
-                        value={budget}
-                        onChange={e => setBudget(Number(e.target.value))}
-                        className="flex-1 rounded-xl bg-white ring-1 ring-neutral-200 px-4 py-3 font-semibold"
-                      />
+                    <label style={{ fontSize: '0.875rem', fontWeight: 700, color: '#D1D5DB' }}>Orçamento por sessão (Kz)</label>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
+                      <span style={{ color: '#6B7280' }}>Kz</span>
+                      <input type="number" min={50} max={10000} step={50} value={budget} onChange={e => setBudget(Number(e.target.value))} style={{ flex: 1, borderRadius: '12px', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', padding: '12px 16px', fontWeight: 600, color: '#fff' }} />
                     </div>
-                    <input
-                      type="range"
-                      min={50}
-                      max={2000}
-                      step={50}
-                      value={budget}
-                      onChange={e => setBudget(Number(e.target.value))}
-                      className="w-full mt-2 accent-red-600"
-                    />
+                    <input type="range" min={50} max={2000} step={50} value={budget} onChange={e => setBudget(Number(e.target.value))} style={{ width: '100%', marginTop: '8px', accentColor: '#00F5A0' }} />
                   </div>
                   <div>
-                    <label className="text-sm font-bold">Valor por combinação (Kz)</label>
-                    <select
-                      value={stakePerLine}
-                      onChange={e => setStakePerLine(Number(e.target.value))}
-                      className="w-full rounded-xl bg-white ring-1 ring-neutral-200 px-4 py-3 font-semibold mt-1"
-                    >
+                    <label style={{ fontSize: '0.875rem', fontWeight: 700, color: '#D1D5DB' }}>Valor por combinação (Kz)</label>
+                    <select value={stakePerLine} onChange={e => setStakePerLine(Number(e.target.value))} style={{ width: '100%', borderRadius: '12px', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', padding: '12px 16px', fontWeight: 600, marginTop: '4px', color: '#fff' }}>
                       <option value={50}>50 Kz (mínimo)</option>
                       <option value={100}>100 Kz</option>
                       <option value={200}>200 Kz</option>
@@ -1306,149 +1487,118 @@ export default function App() {
                     </select>
                   </div>
                 </div>
-
-                <div className="bg-neutral-100 rounded-2xl p-4 text-center">
-                  <div className="text-2xl font-bold text-red-600">{recs.total} combinações</div>
-                  <div className="text-sm text-neutral-600">
-                    Custo total: {fmtKz(recs.total * stakePerLine)} •
-                    {budget - (recs.total * stakePerLine) > 0
-                      ? ` Sobra: ${fmtKz(budget - (recs.total * stakePerLine))}`
-                      : ' ✅ Orçamento ajustado'}
-                  </div>
+                <div style={{ background: 'rgba(255,255,255,0.05)', borderRadius: '16px', padding: '16px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#00F5A0' }}>{recs.total} combinações</div>
+                  <div style={{ fontSize: '0.875rem', color: '#9CA3AF' }}>Custo total: {fmtKz(recs.total * stakePerLine)} · {budget - (recs.total * stakePerLine) > 0 ? `Sobra: ${fmtKz(budget - (recs.total * stakePerLine))}` : '✅ Orçamento ajustado'}</div>
                 </div>
-
-                <div className="grid grid-cols-2 gap-2 text-center">
-                  <div className="bg-white rounded-xl p-2 ring-1 ring-neutral-200">
-                    <div className="text-xs text-neutral-500">⚖️ Equilibrado</div>
-                    <div className="text-xl font-bold text-red-600">{recs.equilibrado}</div>
-                  </div>
-                  <div className="bg-white rounded-xl p-2 ring-1 ring-neutral-200">
-                    <div className="text-xs text-neutral-500">🎲 Aleatório</div>
-                    <div className="text-xl font-bold text-red-600">{recs.aleatorio}</div>
-                  </div>
-                  <div className="bg-white rounded-xl p-2 ring-1 ring-neutral-200">
-                    <div className="text-xs text-neutral-500">📊 Monte Carlo</div>
-                    <div className="text-xl font-bold text-red-600">{recs.montecarlo}</div>
-                  </div>
-                  <div className="bg-white rounded-xl p-2 ring-1 ring-neutral-200">
-                    <div className="text-xs text-neutral-500">📈 Frequência</div>
-                    <div className="text-xl font-bold text-red-600">{recs.frequencia}</div>
-                  </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px', textAlign: 'center' }}>
+                  {[['⚖️ Equilibrado', recs.equilibrado], ['🌙 Kazola', recs.kazola], ['🎲 Monte Carlo', recs.montecarlo], ['📈 Frequência', recs.frequencia]].map(([label, val]) => (
+                    <div key={String(label)} style={{ background: 'rgba(255,255,255,0.05)', borderRadius: '12px', padding: '8px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                      <div style={{ fontSize: '0.75rem', color: '#9CA3AF' }}>{label}</div>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#00F5A0' }}>{val}</div>
+                    </div>
+                  ))}
                 </div>
               </div>
             </Card>
 
-            {/* Tabela de Ganhos */}
+            {/* Tabela de prémios */}
             <Card title="🏆 Se ganhar, quanto recebe?" icon={<span>💰</span>}>
               <div className="space-y-4">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-neutral-100">
-                      <tr>
-                        <th className="px-4 py-2 text-left">Acertos</th>
-                        <th className="px-4 py-2 text-right">Prémio por linha</th>
-                        <th className="px-4 py-2 text-right">Se acertar 1 linha</th>
-                        <th className="px-4 py-2 text-right">Se acertar todas</th>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', fontSize: '0.875rem', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ background: 'rgba(255,255,255,0.05)' }}>
+                        {['Acertos', 'Prémio por linha', 'Se acertar 1 linha', 'Se acertar todas'].map(h => (
+                          <th key={h} style={{ padding: '8px 16px', textAlign: h === 'Acertos' ? 'left' : 'right', fontWeight: 700, color: '#D1D5DB' }}>{h}</th>
+                        ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {[
-                        { hits: 2, mult: 10 },
-                        { hits: 3, mult: 120 },
-                        { hits: 4, mult: 5000 },
-                        { hits: 5, mult: 100000 },
-                      ].map(({ hits, mult }) => {
+                      {[{ hits: 2, mult: 10 }, { hits: 3, mult: 120 }, { hits: 4, mult: 5000 }, { hits: 5, mult: 100000 }].map(({ hits, mult }) => {
                         const prize = stakePerLine * mult;
                         const prizeWithTax = prize <= TAX_FREE_KZ ? prize : TAX_FREE_KZ + (prize - TAX_FREE_KZ) * (1 - TAX_RATE);
                         return (
-                          <tr key={hits} className="border-b">
-                            <td className="px-4 py-2 font-bold">{hits} números</td>
-                            <td className="px-4 py-2 text-right font-mono">×{mult.toLocaleString('pt-AO')} = {fmtKz(prize)}</td>
-                            <td className="px-4 py-2 text-right font-mono font-bold text-green-600">{fmtKz(prizeWithTax)}</td>
-                            <td className="px-4 py-2 text-right font-mono font-bold text-red-600">{fmtKz(prizeWithTax * recs.total)}</td>
+                          <tr key={hits} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                            <td style={{ padding: '8px 16px', fontWeight: 700, color: '#D1D5DB' }}>{hits} números</td>
+                            <td style={{ padding: '8px 16px', textAlign: 'right', fontFamily: 'monospace', color: '#9CA3AF' }}>×{mult.toLocaleString('pt-AO')} = {fmtKz(prize)}</td>
+                            <td style={{ padding: '8px 16px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: '#00F5A0' }}>{fmtKz(prizeWithTax)}</td>
+                            <td style={{ padding: '8px 16px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: '#EF4444' }}>{fmtKz(prizeWithTax * recs.total)}</td>
                           </tr>
                         );
                       })}
                     </tbody>
                   </table>
                 </div>
-
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                  <div className="bg-neutral-900 text-white rounded-xl p-2 text-center">
-                    <div className="text-xs">Aposta total</div>
-                    <div className="font-bold">{fmtKz(recs.total * stakePerLine)}</div>
-                  </div>
-                  <div className="bg-green-600 text-white rounded-xl p-2 text-center">
-                    <div className="text-xs">⭐ 3 acertos</div>
-                    <div className="font-bold">{fmtKz(stakePerLine * 120)}</div>
-                  </div>
-                  <div className="bg-blue-600 text-white rounded-xl p-2 text-center">
-                    <div className="text-xs">⭐⭐ 4 acertos</div>
-                    <div className="font-bold">{fmtKz(stakePerLine * 5000)}</div>
-                  </div>
-                  <div className="bg-red-600 text-white rounded-xl p-2 text-center">
-                    <div className="text-xs">⭐⭐⭐ JACKPOT</div>
-                    <div className="font-bold">{fmtKz(stakePerLine * 100000)}</div>
-                  </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }} className="md:grid-cols-4">
+                  {[['Aposta total', fmtKz(recs.total * stakePerLine), '#374151'], ['⭐ 3 acertos', fmtKz(stakePerLine * 120), '#059669'], ['⭐⭐ 4 acertos', fmtKz(stakePerLine * 5000), '#1D4ED8'], ['⭐⭐⭐ JACKPOT', fmtKz(stakePerLine * 100000), '#DC2626']].map(([label, val, bg]) => (
+                    <div key={String(label)} style={{ background: bg, borderRadius: '12px', padding: '8px', textAlign: 'center', color: '#fff' }}>
+                      <div style={{ fontSize: '0.75rem' }}>{label}</div>
+                      <div style={{ fontWeight: 700 }}>{val}</div>
+                    </div>
+                  ))}
                 </div>
-
-                <div className="text-xs text-neutral-500 text-center">
-                  💡 Imposto: prémios ≤ {fmtKz(TAX_FREE_KZ)} são isentos. Acima disso, paga 15% sobre o excedente.
-                </div>
+                <div style={{ fontSize: '0.75rem', color: '#6B7280', textAlign: 'center' }}>💡 Imposto: prémios ≤ {fmtKz(TAX_FREE_KZ)} são isentos. Acima disso, paga 15% sobre o excedente.</div>
               </div>
             </Card>
 
             {/* Favoritos */}
-            <Card title="Os seus favoritos" subtitle="Guardados neste dispositivo (localStorage)." icon={<span>💾</span>}>
+            <Card title="Os seus favoritos" subtitle="Guardados neste dispositivo." icon={<span>💾</span>}>
               {favorites.length === 0 ? (
-                <p className="text-neutral-500 text-center py-6">
-                  Ainda não guardou nenhuma combinação. Toque no ♡ após gerar.
-                </p>
+                <p style={{ color: '#6B7280', textAlign: 'center', padding: '24px 0' }}>Ainda não guardou nenhuma combinação. Toque no ♡ após gerar.</p>
               ) : (
-                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(1, 1fr)', gap: '12px' }} className="sm:grid-cols-2 lg:grid-cols-3">
                   {favorites.map(f => (
-                    <div key={f.id} className="rounded-2xl bg-neutral-50 p-3 ring-1 ring-neutral-200">
-                      <div className="flex flex-wrap gap-1.5 mb-2">
-                        {f.numbers.map(n => <Ball key={n} n={n} size="sm" />)}
+                    <motion.div 
+                      key={f.id} 
+                      whileHover={{ scale: 1.02 }}
+                      style={{ borderRadius: '16px', background: 'rgba(255,255,255,0.05)', padding: '12px', border: '1px solid rgba(255,255,255,0.08)' }}
+                    >
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }}>
+                        {f.numbers.map((n, i) => (
+                          <ChromeBall key={n} n={n} size="sm" delay={i * 30} animated />
+                        ))}
                       </div>
-                      <button onClick={() => toggleFavorite(f)}
-                        className="text-sm font-bold text-red-600 hover:underline">Remover</button>
-                    </div>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button onClick={() => toggleFavorite(f)} style={{ fontSize: '0.875rem', fontWeight: 700, color: '#EF4444', background: 'none', border: 'none', cursor: 'pointer' }}>Remover</button>
+                        <button onClick={() => handleShareCombination(f.numbers)} style={{ fontSize: '0.875rem', fontWeight: 700, color: '#00F5A0', background: 'none', border: 'none', cursor: 'pointer' }}>Partilhar</button>
+                      </div>
+                    </motion.div>
                   ))}
                 </div>
               )}
             </Card>
 
-            {/* Estatísticas com id */}
+            {/* Estatísticas */}
             <div id="estatisticas">
               <section className="grid lg:grid-cols-2 gap-6">
-                <Card title="Frequência dos números"
-                  subtitle={`Últimos ${Math.min(windowSize, draws.length)} sorteios — ocorrências de cada número.`}
-                  icon={<span>📊</span>}>
-                  <div className="flex items-center gap-3 mb-4">
-                    <label className="text-sm font-bold shrink-0">Janela:</label>
-                    <select value={windowSize} onChange={e => setWindowSize(Number(e.target.value))}
-                      className="rounded-xl bg-white ring-1 ring-neutral-200 px-3 py-2 font-semibold text-sm">
+                <Card title="Frequência dos números" subtitle={`Últimos ${Math.min(windowSize, draws.length)} sorteios`} icon={<span>📊</span>}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+                    <label style={{ fontSize: '0.875rem', fontWeight: 700, flexShrink: 0, color: '#D1D5DB' }}>Janela:</label>
+                    <select value={windowSize} onChange={e => setWindowSize(Number(e.target.value))} style={{ borderRadius: '12px', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', padding: '8px 12px', fontWeight: 600, fontSize: '0.875rem', color: '#fff' }}>
                       <option value={20}>20 sorteios</option>
                       <option value={60}>60 sorteios</option>
                       <option value={120}>120 sorteios</option>
                       <option value={draws.length}>Todos ({draws.length})</option>
                     </select>
                   </div>
-                  <div className="space-y-0.5 max-h-[420px] overflow-y-auto pr-1">
+                  <div style={{ maxHeight: '420px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px' }}>
                     {freq.freq.slice(1).map((c, i) => {
                       const n = i + 1;
                       const denom = Math.min(windowSize, draws.length) || 1;
                       return (
-                        <div key={n} className="flex items-center gap-2 text-sm">
-                          <div className="w-8 text-right font-mono font-bold text-xs">{String(n).padStart(2, '0')}</div>
-                          <div className="flex-1 h-5 rounded-md bg-neutral-100 overflow-hidden">
-                            <div className="bar-grow h-full bg-gradient-to-r from-red-600 to-amber-400"
-                              style={{ width: `${(c / maxFreq) * 100}%` }} />
+                        <div key={n} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.875rem' }}>
+                          <div style={{ width: '32px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, fontSize: '0.75rem', color: '#9CA3AF' }}>{String(n).padStart(2, '0')}</div>
+                          <div style={{ flex: 1, height: '20px', borderRadius: '6px', background: 'rgba(255,255,255,0.05)', overflow: 'hidden' }}>
+                            <motion.div 
+                              className="bar-grow" 
+                              initial={{ width: 0 }}
+                              animate={{ width: `${(c / maxFreq) * 100}%` }}
+                              transition={{ duration: 0.5, delay: i * 0.01 }}
+                              style={{ height: '100%', background: 'linear-gradient(90deg, #EF4444, #F59E0B)' }} 
+                            />
                           </div>
-                          <div className="w-14 text-right text-neutral-500 text-xs">
-                            {c}x · {((c / denom) * 100).toFixed(0)}%
-                          </div>
+                          <div style={{ width: '56px', textAlign: 'right', color: '#6B7280', fontSize: '0.75rem' }}>{c}x · {((c / denom) * 100).toFixed(0)}%</div>
                         </div>
                       );
                     })}
@@ -1456,190 +1606,177 @@ export default function App() {
                 </Card>
 
                 <div className="space-y-6">
-                  <Card title="🔥 Quentes & ❄️ Frios"
-                    subtitle="Os 8 mais e menos frequentes na janela seleccionada." icon={<span>📈</span>}>
-                    <div className="grid grid-cols-2 gap-4">
+                  <Card title="🔥 Quentes & ❄️ Frios" subtitle="Os 8 mais e menos frequentes." icon={<span>📈</span>}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '16px' }}>
                       <div>
-                        <div className="font-bold mb-2 text-red-600 text-sm">🔥 Mais frequentes</div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {hotCold.hot.map(n => <Ball key={n} n={n} variant="hot" size="sm" />)}
+                        <div style={{ fontWeight: 700, marginBottom: '8px', color: '#EF4444', fontSize: '0.875rem' }}>🔥 Mais frequentes</div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                          {hotCold.hot.map(n => <ChromeBall key={n} n={n} variant="hot" size="sm" animated />)}
                         </div>
                       </div>
                       <div>
-                        <div className="font-bold mb-2 text-sky-700 text-sm">❄️ Menos frequentes</div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {hotCold.cold.map(n => <Ball key={n} n={n} variant="cold" size="sm" />)}
+                        <div style={{ fontWeight: 700, marginBottom: '8px', color: '#60A5FA', fontSize: '0.875rem' }}>❄️ Menos frequentes</div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                          {hotCold.cold.map(n => <ChromeBall key={n} n={n} variant="cold" size="sm" animated />)}
                         </div>
                       </div>
                     </div>
-                    <p className="text-xs text-neutral-500 mt-3">
-                      A frequência passada <strong>não prevê resultados futuros</strong>. Cada sorteio é independente.
-                    </p>
+                    <p style={{ fontSize: '0.75rem', color: '#6B7280', marginTop: '12px' }}>A frequência passada <strong>não prevê resultados futuros</strong>. Cada sorteio é independente.</p>
                   </Card>
 
-                  <Card title="Atraso (gap analysis)"
-                    subtitle="Há quantos sorteios cada número não sai." icon={<span>⏳</span>}>
-                    <div className="grid grid-cols-10 gap-1">
+                  <Card title="Atraso (gap analysis)" subtitle="Há quantos sorteios cada número não sai." icon={<span>⏳</span>}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(10, 1fr)', gap: '4px' }}>
                       {gaps.map(({ n, gap }) => (
-                        <div key={n} title={`Nº ${n} — ${gap} sorteios sem sair`}
-                          className={`aspect-square rounded-md text-[9px] font-bold flex items-center justify-center ring-1 ${
-                            gap >= 30 ? 'bg-red-600 text-white ring-red-600'
-                            : gap >= 15 ? 'bg-amber-100 ring-amber-300'
-                            : 'bg-neutral-100 ring-neutral-200'
-                          }`}>
+                        <motion.div 
+                          key={n} 
+                          whileHover={{ scale: 1.1 }}
+                          title={`Nº ${n} — ${gap} sorteios sem sair`}
+                          style={{ aspectRatio: '1', borderRadius: '6px', fontSize: '0.5625rem', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', background: gap >= 30 ? '#DC2626' : gap >= 15 ? 'rgba(245,158,11,0.3)' : 'rgba(255,255,255,0.05)', color: gap >= 30 ? '#fff' : '#9CA3AF', border: '1px solid rgba(255,255,255,0.08)' }}
+                        >
                           {String(n).padStart(2, '0')}
-                        </div>
+                        </motion.div>
                       ))}
                     </div>
-                    <div className="flex gap-4 mt-2 text-xs text-neutral-600">
-                      <span><span className="inline-block w-3 h-3 rounded bg-red-600 align-middle mr-1"/>≥ 30 sorteios</span>
-                      <span><span className="inline-block w-3 h-3 rounded bg-amber-200 align-middle mr-1"/>15–29</span>
-                      <span><span className="inline-block w-3 h-3 rounded bg-neutral-200 align-middle mr-1"/>0–14</span>
+                    <div style={{ display: 'flex', gap: '16px', marginTop: '8px', fontSize: '0.75rem', color: '#9CA3AF' }}>
+                      <span><span style={{ display: 'inline-block', width: '12px', height: '12px', borderRadius: '3px', background: '#DC2626', verticalAlign: 'middle', marginRight: '4px' }}/>≥ 30 sorteios</span>
+                      <span><span style={{ display: 'inline-block', width: '12px', height: '12px', borderRadius: '3px', background: 'rgba(245,158,11,0.3)', verticalAlign: 'middle', marginRight: '4px' }}/>15–29</span>
+                      <span><span style={{ display: 'inline-block', width: '12px', height: '12px', borderRadius: '3px', background: 'rgba(255,255,255,0.05)', verticalAlign: 'middle', marginRight: '4px' }}/>0–14</span>
                     </div>
                   </Card>
                 </div>
               </section>
             </div>
 
-            {/* Distribuição por dezena */}
-            <Card title="Distribuição por dezena"
-              subtitle="Quantas vezes saíram números de cada faixa de 10, no total do histórico."
-              icon={<span>📉</span>}>
+            <Card title="Distribuição por dezena" subtitle="Quantas vezes saíram números de cada faixa de 10." icon={<span>📉</span>}>
               <div className="space-y-2">
                 {decades.map(({ label, count }) => (
-                  <div key={label} className="flex items-center gap-3 text-sm">
-                    <div className="w-14 text-right font-mono font-bold text-xs text-neutral-600">{label}</div>
-                    <div className="flex-1 h-6 rounded-lg bg-neutral-100 overflow-hidden">
-                      <div className="bar-grow h-full bg-gradient-to-r from-red-600/60 to-amber-400"
-                        style={{ width: `${(count / maxDecade) * 100}%` }} />
+                  <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '0.875rem' }}>
+                    <div style={{ width: '56px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, fontSize: '0.75rem', color: '#6B7280' }}>{label}</div>
+                    <div style={{ flex: 1, height: '24px', borderRadius: '8px', background: 'rgba(255,255,255,0.05)', overflow: 'hidden' }}>
+                      <motion.div 
+                        className="bar-grow" 
+                        initial={{ width: 0 }}
+                        animate={{ width: `${(count / maxDecade) * 100}%` }}
+                        transition={{ duration: 0.5 }}
+                        style={{ height: '100%', background: 'linear-gradient(90deg, rgba(239,68,68,0.6), #F59E0B)' }} 
+                      />
                     </div>
-                    <div className="w-10 text-right text-neutral-500 text-xs font-mono">{count}</div>
+                    <div style={{ width: '40px', textAlign: 'right', color: '#6B7280', fontSize: '0.75rem', fontFamily: 'monospace' }}>{count}</div>
                   </div>
                 ))}
               </div>
             </Card>
 
-            {/* Par/Ímpar · Soma · Probabilidades */}
             <section className="grid md:grid-cols-3 gap-6">
               <Card title="Par / Ímpar" subtitle="Distribuição observada no histórico." icon={<span>⚖️</span>}>
-                <div className="text-sm mb-3 text-neutral-500">
-                  {parityStat.pairs + parityStat.odds} números no total
-                </div>
-                {(parityStat.pairs + parityStat.odds) > 0 && (
-                  <div className="h-10 rounded-2xl flex overflow-hidden">
-                    <div className="bg-red-600 flex items-center justify-center text-white text-sm font-bold"
-                      style={{ width: `${(parityStat.pairs / (parityStat.pairs + parityStat.odds)) * 100}%` }}>
+                <div style={{ fontSize: '0.875rem', marginBottom: '12px', color: '#6B7280' }}>{isNaN(parityStat.pairs + parityStat.odds) ? 0 : parityStat.pairs + parityStat.odds} números no total</div>
+                {!loadingApi && !isNaN(parityStat.pairs + parityStat.odds) && (parityStat.pairs + parityStat.odds) > 0 && (
+                  <div style={{ height: '40px', borderRadius: '16px', display: 'flex', overflow: 'hidden' }}>
+                    <motion.div 
+                      initial={{ width: 0 }}
+                      animate={{ width: `${(parityStat.pairs / (parityStat.pairs + parityStat.odds)) * 100}%` }}
+                      transition={{ duration: 0.5 }}
+                      style={{ background: '#DC2626', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.875rem', fontWeight: 700 }}
+                    >
                       Pares {((parityStat.pairs / (parityStat.pairs + parityStat.odds)) * 100).toFixed(0)}%
-                    </div>
-                    <div className="bg-neutral-800 flex items-center justify-center text-white text-sm font-bold"
-                      style={{ width: `${(parityStat.odds / (parityStat.pairs + parityStat.odds)) * 100}%` }}>
+                    </motion.div>
+                    <motion.div 
+                      initial={{ width: 0 }}
+                      animate={{ width: `${(parityStat.odds / (parityStat.pairs + parityStat.odds)) * 100}%` }}
+                      transition={{ duration: 0.5 }}
+                      style={{ background: '#1F2937', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.875rem', fontWeight: 700 }}
+                    >
                       Ímpares {((parityStat.odds / (parityStat.pairs + parityStat.odds)) * 100).toFixed(0)}%
-                    </div>
+                    </motion.div>
                   </div>
                 )}
               </Card>
-
               <Card title="Soma dos 5 números" subtitle="Mínimo, máximo e média observados." icon={<span>➕</span>}>
-                <div className="space-y-2 text-sm">
+                <div className="space-y-2" style={{ fontSize: '0.875rem' }}>
                   {[['Mínimo', sum.min], ['Máximo', sum.max], ['Média', sum.avg.toFixed(1)]].map(([k, v]) => (
-                    <div key={String(k)} className="flex justify-between">
-                      <span className="text-neutral-600">{k}</span>
-                      <strong className="font-display">{v}</strong>
+                    <div key={String(k)} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ color: '#6B7280' }}>{k}</span>
+                      <strong style={{ color: '#D1D5DB' }}>{v}</strong>
                     </div>
                   ))}
-                  <div className="flex justify-between text-neutral-500 text-xs pt-1 border-t">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', color: '#6B7280', fontSize: '0.75rem', paddingTop: '4px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                     <span>Intervalo teórico possível</span><span>15 – 440</span>
                   </div>
                 </div>
               </Card>
-
               <Card title="Probabilidades reais" subtitle="Por linha jogada no Loto 5/90." icon={<span>🎯</span>}>
-                <ul className="space-y-1.5 text-sm">
-                  {[
-                    ['5 certos (jackpot)', probs.five],
-                    ['4 certos', probs.four],
-                    ['3 certos', probs.three],
-                    ['2 certos', probs.two],
-                  ].map(([label, val]) => (
-                    <li key={String(label)} className="flex justify-between">
-                      <span className="text-neutral-600">{label}</span>
-                      <strong className="font-mono text-xs">1 em {Number(val).toLocaleString('pt-AO')}</strong>
+                <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '0.875rem' }}>
+                  {[['5 certos (jackpot)', probs.five], ['4 certos', probs.four], ['3 certos', probs.three], ['2 certos', probs.two]].map(([label, val]) => (
+                    <li key={String(label)} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ color: '#6B7280' }}>{label}</span>
+                      <strong style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: '#D1D5DB' }}>1 em {Number(val).toLocaleString('pt-AO')}</strong>
                     </li>
                   ))}
                 </ul>
-                <p className="text-xs text-neutral-500 mt-3 border-t pt-2">
-                  Total combinações C(90,5) = {probs.total.toLocaleString('pt-AO')}
-                </p>
+                <p style={{ fontSize: '0.75rem', color: '#6B7280', marginTop: '12px', paddingTop: '8px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>Total combinações C(90,5) = {probs.total.toLocaleString('pt-AO')}</p>
               </Card>
             </section>
 
-            {/* Histórico com id */}
+            {/* Histórico */}
             <div id="historico">
-              <Card title="Histórico interactivo"
-                subtitle="Clique num sorteio para o seleccionar. Dados mais recentes primeiro."
-                icon={<span>📜</span>}>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-sm">
-                    <thead className="bg-neutral-100 text-neutral-700">
-                      <tr>
-                        <th className="px-3 py-3 font-bold">Data</th>
-                        <th className="px-3 py-3 font-bold">Hora</th>
-                        <th className="px-3 py-3 font-bold">Sessão</th>
-                        <th className="px-3 py-3 font-bold">Concurso</th>
-                        <th className="px-3 py-3 font-bold">Números sorteados</th>
-                        <th className="px-3 py-3 font-bold">Soma</th>
+              <Card title="Histórico interactivo" subtitle="Clique num sorteio para o seleccionar. Dados mais recentes primeiro." icon={<span>📜</span>}>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', textAlign: 'left', fontSize: '0.875rem', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ background: 'rgba(255,255,255,0.05)' }}>
+                        {['Data', 'Hora', 'Sessão', 'Concurso', 'Números sorteados', 'Soma'].map(h => (
+                          <th key={h} style={{ padding: '12px', fontWeight: 700, color: '#9CA3AF' }}>{h}</th>
+                        ))}
                       </tr>
                     </thead>
                     <tbody>
                       {histSlice.map(d => (
-                        <tr key={d.id} onClick={() => setActiveDraw(d)}
-                          className={`border-b border-neutral-100 cursor-pointer transition ${
-                            activeDraw?.id === d.id ? 'bg-amber-50 font-semibold' : 'hover:bg-neutral-50'
-                          }`}>
-                          <td className="px-3 py-2.5 whitespace-nowrap text-sm">{formatDate(d.date)}</td>
-                          <td className="px-3 py-2.5 font-mono text-xs text-neutral-600">{d.time ?? '—'}</td>
-                          <td className="px-3 py-2.5 text-xs font-semibold">
-                            {d.session === 'fezada' && <span className="text-red-600">☀️ Fezada</span>}
-                            {d.session === 'aqueceu' && <span className="text-orange-600">🔥 Aqueceu</span>}
-                            {d.session === 'kazola' && <span className="text-green-600">🌙 Kazola</span>}
-                            {d.session === 'eskebra' && <span className="text-purple-600">⚡ Eskebra</span>}
+                        <motion.tr 
+                          key={d.id} 
+                          whileHover={{ background: 'rgba(255,255,255,0.03)' }}
+                          onClick={() => setActiveDraw(d)}
+                          style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', cursor: 'pointer', background: activeDraw?.id === d.id ? 'rgba(255,215,0,0.07)' : 'transparent', transition: 'background 0.15s' }}
+                        >
+                          <td style={{ padding: '10px 12px', whiteSpace: 'nowrap', fontSize: '0.875rem', color: '#D1D5DB' }}>{formatDate(d.date)}</td>
+                          <td style={{ padding: '10px 12px', fontFamily: 'monospace', fontSize: '0.75rem', color: '#6B7280' }}>{d.time ?? '—'}</td>
+                          <td style={{ padding: '10px 12px', fontSize: '0.75rem', fontWeight: 600 }}>
+                            {d.session === 'fezada' && <span style={{ color: '#EF4444' }}>☀️ Fezada</span>}
+                            {d.session === 'aqueceu' && <span style={{ color: '#F97316' }}>🔥 Aqueceu</span>}
+                            {d.session === 'kazola' && <span style={{ color: '#00F5A0' }}>🌙 Kazola</span>}
+                            {d.session === 'eskebra' && <span style={{ color: '#A855F7' }}>⚡ Eskebra</span>}
                             {!d.session && '—'}
                           </td>
-                          <td className="px-3 py-2.5 font-mono text-xs text-neutral-500">{d.id}</td>
-                          <td className="px-3 py-2.5">
-                            <div className="flex flex-wrap gap-1">
-                              {d.numbers.map(n => (
-                                <span key={n}
-                                  className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-white ring-2 ring-neutral-300 font-bold text-[10px]">
-                                  {String(n).padStart(2, '0')}
-                                </span>
+                          <td style={{ padding: '10px 12px', fontFamily: 'monospace', fontSize: '0.75rem', color: '#6B7280' }}>{d.id}</td>
+                          <td style={{ padding: '10px 12px' }}>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                              {d.numbers.map((n, i) => (
+                                <ChromeBall key={n} n={n} size="sm" delay={i * 20} animated />
                               ))}
                             </div>
                           </td>
-                          <td className="px-3 py-2.5 font-bold font-mono">
-                            {d.numbers.reduce((a, b) => a + b, 0)}
-                          </td>
-                        </tr>
+                          <td style={{ padding: '10px 12px', fontWeight: 700, fontFamily: 'monospace', color: '#FFD700' }}>{d.numbers.reduce((a, b) => a + b, 0)}</td>
+                        </motion.tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
-
                 {histPages > 1 && (
-                  <div className="flex items-center justify-between mt-4 text-sm">
-                    <button onClick={() => setHistPage(p => Math.max(0, p - 1))}
-                      disabled={histPage === 0}
-                      className="px-4 py-2 rounded-xl bg-neutral-100 hover:bg-neutral-200 disabled:opacity-40 font-semibold transition">
-                      ← Anterior
-                    </button>
-                    <span className="text-neutral-600">
-                      Página {histPage + 1} de {histPages} · {draws.length} sorteios
-                    </span>
-                    <button onClick={() => setHistPage(p => Math.min(histPages - 1, p + 1))}
-                      disabled={histPage === histPages - 1}
-                      className="px-4 py-2 rounded-xl bg-neutral-100 hover:bg-neutral-200 disabled:opacity-40 font-semibold transition">
-                      Próxima →
-                    </button>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '16px', fontSize: '0.875rem' }}>
+                    <motion.button 
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => setHistPage(p => Math.max(0, p - 1))} 
+                      disabled={histPage === 0} 
+                      style={{ padding: '8px 16px', borderRadius: '12px', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', color: '#D1D5DB', fontWeight: 600, cursor: histPage === 0 ? 'not-allowed' : 'pointer', opacity: histPage === 0 ? 0.4 : 1 }}
+                    >← Anterior</motion.button>
+                    <span style={{ color: '#6B7280' }}>Página {histPage + 1} de {histPages} · {draws.length} sorteios</span>
+                    <motion.button 
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => setHistPage(p => Math.min(histPages - 1, p + 1))} 
+                      disabled={histPage === histPages - 1} 
+                      style={{ padding: '8px 16px', borderRadius: '12px', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', color: '#D1D5DB', fontWeight: 600, cursor: histPage === histPages - 1 ? 'not-allowed' : 'pointer', opacity: histPage === histPages - 1 ? 0.4 : 1 }}
+                    >Próxima →</motion.button>
                   </div>
                 )}
               </Card>
@@ -1647,228 +1784,169 @@ export default function App() {
           </>
         )}
 
-        {/* ═══════════ TAB: TOTOBOLA — EM BREVE ══════════════════════ */}
+        {/* ── TAB TOTOBOLA ── */}
         {tab === 'totobola' && (
           <section id="totobola">
-            <Card
-              title="⚽ Totobola — Em breve"
-              subtitle="Prognósticos de futebol · A caminho"
-              icon={<span>⚽</span>}
-            >
-              <div className="flex flex-col items-center text-center py-10 gap-6">
-                <div className="w-24 h-24 rounded-full bg-gradient-to-br from-green-600 to-green-800 flex items-center justify-center text-5xl shadow-lg animate-pulse">
-                  ⚽
-                </div>
+            <Card title="⚽ Totobola — Em breve" subtitle="Prognósticos de futebol · A caminho" icon={<span>⚽</span>}>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', padding: '40px 0', gap: '24px' }}>
+                <motion.div 
+                  animate={{ scale: [1, 1.1, 1], rotate: [0, 5, -5, 0] }}
+                  transition={{ repeat: Infinity, duration: 2 }}
+                  style={{ width: '96px', height: '96px', borderRadius: '50%', background: 'linear-gradient(135deg, #16a34a, #14532d)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '3rem' }}
+                >⚽</motion.div>
                 <div>
-                  <h2 className="font-display font-black text-3xl md:text-4xl mb-2">
-                    Totobola em preparação
-                  </h2>
-                  <p className="text-neutral-600 text-base md:text-lg max-w-xl leading-relaxed">
-                    Estamos a trabalhar para integrar a grelha oficial de prognósticos desportivos
-                    do <strong>Totobola de Angola</strong>, em parceria com dados oficiais do{' '}
-                    <strong>ISJ (Instituto de Supervisão de Jogos)</strong> e da{' '}
-                    <strong>FAF (Federação Angolana de Futebol)</strong>.
+                  <h2 style={{ fontWeight: 900, fontSize: 'clamp(1.5rem, 4vw, 2rem)', marginBottom: '8px' }}>Totobola em preparação</h2>
+                  <p style={{ color: '#9CA3AF', maxWidth: '520px', lineHeight: 1.6 }}>
+                    Estamos a trabalhar para integrar a grelha oficial de prognósticos desportivos do <strong style={{ color: '#fff' }}>Totobola de Angola</strong>.
                   </p>
                 </div>
-                <div className="w-full max-w-lg bg-neutral-50 ring-1 ring-neutral-200 rounded-2xl p-6 text-left">
-                  <p className="font-bold text-base mb-3 text-neutral-800">📋 O que vai incluir:</p>
-                  <ul className="space-y-2 text-sm text-neutral-700">
-                    <li className="flex items-start gap-2"><span className="text-green-600 font-bold mt-0.5">✓</span>Grelha semanal oficial com jogos do <strong>Girabola</strong> e outras competições</li>
-                    <li className="flex items-start gap-2"><span className="text-green-600 font-bold mt-0.5">✓</span>Prognósticos <strong>1 · X · 2</strong> com resumo do boletim</li>
-                    <li className="flex items-start gap-2"><span className="text-green-600 font-bold mt-0.5">✓</span>Resultados reais e contagem de acertos automática</li>
-                    <li className="flex items-start gap-2"><span className="text-green-600 font-bold mt-0.5">✓</span>Probabilidades e estatísticas de prognósticos</li>
-                    <li className="flex items-start gap-2"><span className="text-green-600 font-bold mt-0.5">✓</span>Histórico de boletins e desempenho pessoal</li>
-                  </ul>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', justifyContent: 'center' }}>
+                  {['🔧 Em desenvolvimento', '🇦🇴 Dados oficiais ISJ', '⚽ Girabola 2025/26'].map(b => (
+                    <motion.span 
+                      key={b} 
+                      whileHover={{ scale: 1.05 }}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '8px 16px', borderRadius: '999px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', fontWeight: 700, fontSize: '0.875rem', color: '#D1D5DB' }}
+                    >{b}</motion.span>
+                  ))}
                 </div>
-                <div className="flex flex-wrap gap-3 justify-center">
-                  <span className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-amber-100 text-amber-800 font-bold text-sm ring-1 ring-amber-300">🔧 Em desenvolvimento</span>
-                  <span className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-100 text-emerald-800 font-bold text-sm ring-1 ring-emerald-300">🇦🇴 Dados oficiais ISJ</span>
-                  <span className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-neutral-100 text-neutral-700 font-bold text-sm ring-1 ring-neutral-300">⚽ Girabola 2025/26</span>
-                </div>
-                <p className="text-xs text-neutral-500 max-w-md leading-relaxed border-t pt-4 w-full">
-                  ⚠️ Para garantir qualidade e fiabilidade, o Totobola só será lançado com dados
-                  oficiais verificados. Não serão usadas grelhas fictícias ou simuladas.
-                </p>
               </div>
             </Card>
           </section>
         )}
 
-        {/* ═══════════ TAB: PRÉMIOS ════════════════════════════════ */}
+        {/* ── TAB PRÉMIOS ── */}
         {tab === 'premios' && (
           <div id="premios">
             <section className="space-y-6">
               <Card title="Simulador de prémios" subtitle="Calcule o prémio líquido com base no Decreto Executivo n.º 695/25." icon={<span>💰</span>}>
                 <PrizeCalculator />
               </Card>
-
               <Card title="Tabela de multiplicadores" subtitle="Cotas fixas por opção de aposta (Art.º 16 do Decreto 695/25)." icon={<span>📋</span>}>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-neutral-100">
-                      <tr>
-                        <th className="px-4 py-3 text-left font-bold">Opção</th>
-                        <th className="px-4 py-3 text-left font-bold">Acerta</th>
-                        <th className="px-4 py-3 text-right font-bold">Multiplicador</th>
-                        <th className="px-4 py-3 text-right font-bold">Prémio por {fmtKz(100)}</th>
-                        <th className="px-4 py-3 text-right font-bold">Prémio por {fmtKz(1000)}</th>
-                      </tr>
-                    </thead>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', fontSize: '0.875rem', borderCollapse: 'collapse' }}>
+                    <thead><tr style={{ background: 'rgba(255,255,255,0.05)' }}>{['Opção', 'Acerta', 'Multiplicador', `Prémio por ${fmtKz(100)}`, `Prémio por ${fmtKz(1000)}`].map(h => <th key={h} style={{ padding: '12px 16px', textAlign: h === 'Opção' || h === 'Acerta' ? 'left' : 'right', fontWeight: 700, color: '#D1D5DB' }}>{h}</th>)}</tr></thead>
                     <tbody>
-                      {([
-                        [2, 'os 2 números escolhidos', 4],
-                        [3, 'os 3 números escolhidos', 25],
-                        [4, 'os 4 números escolhidos', 120],
-                        [5, 'os 5 números escolhidos', 2500],
-                      ] as [number, string, number][]).map(([opt, desc, mult]) => (
-                        <tr key={opt} className="border-b border-neutral-100 hover:bg-neutral-50">
-                          <td className="px-4 py-3 font-display font-black text-lg">{opt} números</td>
-                          <td className="px-4 py-3 text-neutral-600">{desc}</td>
-                          <td className="px-4 py-3 text-right font-mono font-bold text-blue-600">×{mult}</td>
-                          <td className="px-4 py-3 text-right font-mono">{fmtKz(100 * mult)}</td>
-                          <td className="px-4 py-3 text-right font-mono font-bold">{fmtKz(1000 * mult)}</td>
+                      {([[2,'os 2 números escolhidos',4],[3,'os 3 números escolhidos',25],[4,'os 4 números escolhidos',120],[5,'os 5 números escolhidos',2500]] as [number,string,number][]).map(([opt,desc,mult]) => (
+                        <tr key={opt} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                          <td style={{ padding: '12px 16px', fontWeight: 900, fontSize: '1.125rem', color: '#D1D5DB' }}>{opt} números</td>
+                          <td style={{ padding: '12px 16px', color: '#9CA3AF' }}>{desc}</td>
+                          <td style={{ padding: '12px 16px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: '#60A5FA' }}>×{mult}</td>
+                          <td style={{ padding: '12px 16px', textAlign: 'right', fontFamily: 'monospace', color: '#9CA3AF' }}>{fmtKz(100 * mult)}</td>
+                          <td style={{ padding: '12px 16px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: '#D1D5DB' }}>{fmtKz(1000 * mult)}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
-                <div className="mt-4 p-4 rounded-2xl bg-amber-50 ring-1 ring-amber-200 text-sm text-amber-900">
-                  <strong>Regime fiscal</strong> ({DECREE_REF}, Art.º 26): prémios ≤ {fmtKz(280_000)} isentos de
-                  imposto · excedente sujeito a 15% de Imposto Especial de Jogos.
-                  Aposta: mínimo {fmtKz(MIN_STAKE_KZ)} · máximo {fmtKz(MAX_STAKE_KZ)}.
+                <div style={{ marginTop: '16px', padding: '16px', borderRadius: '16px', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', fontSize: '0.875rem', color: '#F59E0B' }}>
+                  <strong>Regime fiscal</strong> ({DECREE_REF}, Art.º 26): prémios ≤ {fmtKz(280_000)} isentos de imposto · excedente sujeito a 15% de Imposto Especial de Jogos. Aposta: mínimo {fmtKz(MIN_STAKE_KZ)} · máximo {fmtKz(MAX_STAKE_KZ)}.
                 </div>
               </Card>
             </section>
           </div>
         )}
 
-        {/* ── Aprender / Educativo ── */}
+        {/* ── APRENDER ── */}
         <section id="aprender" className="grid md:grid-cols-2 gap-6">
           <Card title={`Como funciona o ${APP_NAME}`} subtitle="Regras reais, de forma simples." icon={<span>📖</span>}>
-            <ol className="list-decimal pl-5 space-y-2 text-neutral-800 text-sm">
+            <ol style={{ paddingLeft: '20px', margin: 0, display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '0.875rem', color: '#D1D5DB' }}>
               <li>Escolha <strong>{PICK_SIZE} números</strong> de 1 a {TOTAL_NUMBERS}.</li>
-              <li>São sorteadas 5 bolas de entre 90, por máquina automática ou gerador eletrónico supervisionado pelo {REGULATOR}.</li>
+              <li>São sorteadas 5 bolas de entre 90, por máquina automática supervisionada pelo {REGULATOR}.</li>
               <li>Apostas de <strong>{fmtKz(MIN_STAKE_KZ)} a {fmtKz(MAX_STAKE_KZ)}</strong>; pode jogar 2, 3, 4 ou 5 números.</li>
-              <li>Até 28 concursos por semana (2ª–Dom, até 4×/dia). Nomes dos sorteios: <em>Fezada</em> (manhã) e <em>Kazola</em> (tarde).</li>
+              <li>Até 28 concursos por semana (2ª–Dom, até 4×/dia).</li>
               <li>Prémio = valor apostado × multiplicador de cota fixa.</li>
             </ol>
-            <p className="text-xs text-neutral-500 mt-3 pt-3 border-t">
+            <p style={{ fontSize: '0.75rem', color: '#6B7280', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
               Operado pela {OPERATOR} ({CONCESSIONAIRE}) ao abrigo da {LEGAL_REF} e {DECREE_REF}.{' '}
-              <a href={WEBSITE} target="_blank" rel="noopener noreferrer" className="underline hover:text-red-600">
-                {WEBSITE}
-              </a>
+              <a href={WEBSITE} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'underline', color: '#60A5FA' }}>{WEBSITE}</a>
             </p>
           </Card>
-
           <Card title="Mitos vs. Realidade" subtitle="Desmistifique crenças comuns sobre lotarias." icon={<span>🧠</span>}>
-            <ul className="space-y-3 text-sm">
-              <li className="rounded-2xl bg-neutral-50 p-3">
-                <strong>❌ Mito:</strong> "Este número está atrasado, tem de sair."<br />
-                <strong>✅ Realidade:</strong> cada sorteio é independente — a probabilidade de qualquer número é sempre 5/90.
-              </li>
-              <li className="rounded-2xl bg-neutral-50 p-3">
-                <strong>❌ Mito:</strong> "Jogar as combinações vencedoras do passado é mais inteligente."<br />
-                <strong>✅ Realidade:</strong> o histórico não influencia o próximo sorteio — lei dos grandes números.
-              </li>
-              <li className="rounded-2xl bg-neutral-50 p-3">
-                <strong>✅ Bom senso:</strong> jogue por entretenimento, com um orçamento que pode perder, nunca por necessidade financeira.
-              </li>
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '0.875rem' }}>
+              {[
+                ['❌ Mito: "Este número está atrasado, tem de sair."', '✅ Realidade: cada sorteio é independente — a probabilidade de qualquer número é sempre 5/90.'],
+                ['❌ Mito: "Jogar combinações vencedoras do passado é mais inteligente."', '✅ Realidade: o histórico não influencia o próximo sorteio — lei dos grandes números.'],
+                ['✅ Bom senso:', 'Jogue por entretenimento, com um orçamento que pode perder, nunca por necessidade financeira.'],
+              ].map(([mito, real]) => (
+                <li key={mito} style={{ borderRadius: '16px', background: 'rgba(255,255,255,0.05)', padding: '12px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                  <strong style={{ color: '#D1D5DB' }}>{mito}</strong><br />
+                  <span style={{ color: '#9CA3AF' }}>{real}</span>
+                </li>
+              ))}
             </ul>
           </Card>
         </section>
 
-        {/* ── Jogo responsável ── */}
-        <Card title="Jogo responsável" subtitle="Ferramentas de apoio para uma experiência saudável."
-          icon={<span>🛡️</span>} className="bg-emerald-50 ring-1 ring-emerald-200">
-
-          <div className="grid md:grid-cols-3 gap-4">
-            <button onClick={() => setModalResponsavel('autoavaliacao')}
-              className="text-left rounded-2xl bg-white p-5 ring-1 ring-emerald-200 hover:ring-emerald-500 transition-all hover:scale-[1.02] group">
-              <div className="text-3xl mb-2 group-hover:scale-110 transition">📋</div>
-              <div className="font-display font-bold text-lg">Autoavaliação</div>
-              <p className="text-sm text-neutral-700 mt-1">Responda a perguntas para avaliar os seus hábitos de jogo.</p>
-            </button>
-
-            <button onClick={() => setModalResponsavel('limites')}
-              className="text-left rounded-2xl bg-white p-5 ring-1 ring-emerald-200 hover:ring-emerald-500 transition-all hover:scale-[1.02] group">
-              <div className="text-3xl mb-2 group-hover:scale-110 transition">⏱️</div>
-              <div className="font-display font-bold text-lg">Limites de tempo</div>
-              <p className="text-sm text-neutral-700 mt-1">Defina alertas e organize pausas regulares.</p>
-            </button>
-
-            <button onClick={() => setModalResponsavel('reflexao')}
-              className="text-left rounded-2xl bg-white p-5 ring-1 ring-emerald-200 hover:ring-emerald-500 transition-all hover:scale-[1.02] group">
-              <div className="text-3xl mb-2 group-hover:scale-110 transition">🚪</div>
-              <div className="font-display font-bold text-lg">Período de reflexão</div>
-              <p className="text-sm text-neutral-700 mt-1">Afaste-se temporariamente se sentir necessidade.</p>
-            </button>
+        {/* Jogo responsável */}
+        <Card title="Jogo responsável" subtitle="Ferramentas de apoio para uma experiência saudável." icon={<span>🛡️</span>}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(1, 1fr)', gap: '16px' }} className="md:grid-cols-3">
+            {[
+              { modal: 'autoavaliacao' as ModalResponsavelType, icon: '📋', title: 'Autoavaliação', desc: 'Responda a perguntas para avaliar os seus hábitos de jogo.' },
+              { modal: 'limites' as ModalResponsavelType, icon: '⏱️', title: 'Limites de tempo', desc: 'Defina alertas e organize pausas regulares.' },
+              { modal: 'reflexao' as ModalResponsavelType, icon: '🚪', title: 'Período de reflexão', desc: 'Afaste-se temporariamente se sentir necessidade.' },
+            ].map(item => (
+              <motion.button 
+                key={item.title} 
+                whileHover={{ scale: 1.02, borderColor: 'rgba(0,245,160,0.5)' }}
+                onClick={() => setModalResponsavel(item.modal)}
+                style={{ textAlign: 'left', borderRadius: '16px', background: 'rgba(255,255,255,0.03)', padding: '20px', border: '1px solid rgba(0,245,160,0.2)', cursor: 'pointer', transition: 'all 0.2s' }}
+              >
+                <div style={{ fontSize: '1.875rem', marginBottom: '8px' }}>{item.icon}</div>
+                <div style={{ fontWeight: 700, fontSize: '1.125rem', color: '#D1D5DB', marginBottom: '4px' }}>{item.title}</div>
+                <p style={{ fontSize: '0.875rem', color: '#9CA3AF', margin: 0 }}>{item.desc}</p>
+              </motion.button>
+            ))}
           </div>
-
-          <p className="text-xs text-neutral-500 mt-4 pt-3 border-t border-emerald-200">
-            🧠 O jogo deve ser uma atividade de lazer, não uma fonte de rendimento.
-            Se sentir dificuldades em controlar o tempo ou dinheiro investido, procure apoio profissional.
+          <p style={{ fontSize: '0.75rem', color: '#6B7280', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid rgba(0,245,160,0.15)' }}>
+            🧠 O jogo deve ser uma atividade de lazer, não uma fonte de rendimento. Se sentir dificuldades em controlar o tempo ou dinheiro investido, procure apoio profissional.
           </p>
         </Card>
       </main>
 
-      {/* ── Footer ── */}
-      <footer className="mt-12 bg-neutral-900 text-neutral-200">
+      {/* ── FOOTER ── */}
+      <footer style={{ marginTop: '48px', background: '#060911', color: '#9CA3AF', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
         <div className="max-w-6xl mx-auto px-4 py-10 grid md:grid-cols-4 gap-6">
           <div>
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-red-600 to-amber-400 text-white flex items-center justify-center font-display font-black text-sm">KG</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+              <div style={{ width: '44px', height: '44px', borderRadius: '12px', background: 'linear-gradient(135deg, #DC2626, #F59E0B)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900, fontSize: '0.875rem' }}>KG</div>
               <div>
-                <div className="font-display font-black text-lg">{APP_NAME}</div>
-                <div className="text-xs text-neutral-400">{APP_SLOGAN} · +18</div>
+                <div style={{ fontWeight: 900, fontSize: '1.125rem', color: '#fff' }}>{APP_NAME}</div>
+                <div style={{ fontSize: '0.75rem', color: '#6B7280' }}>{APP_SLOGAN} · +18</div>
               </div>
             </div>
-            <p className="text-sm text-neutral-300 leading-relaxed">
-              Análise estatística transparente para estudo de lotaria em Angola.
-              <strong> Não afiliada</strong> à {OPERATOR} nem ao {REGULATOR}.
-            </p>
+            <p style={{ fontSize: '0.875rem', lineHeight: 1.6 }}>Análise estatística transparente para estudo de lotaria em Angola. <strong style={{ color: '#fff' }}> Não afiliada</strong> à {OPERATOR} nem ao {REGULATOR}.</p>
           </div>
           <div>
-            <div className="font-bold mb-2 text-white">Ferramentas</div>
-            <ul className="space-y-1 text-sm">
-              <li><button onClick={() => setTab('loto')} className="hover:text-white">Gerador Loto 5/90</button></li>
-              <li><button onClick={() => setTab('loto')} className="hover:text-white">Estatísticas</button></li>
-              <li><button onClick={() => setTab('loto')} className="hover:text-white">Histórico</button></li>
-              <li><button onClick={() => setTab('totobola')} className="hover:text-white">Totobola</button></li>
-              <li><button onClick={() => setTab('premios')} className="hover:text-white">Simulador de prémios</button></li>
+            <div style={{ fontWeight: 700, marginBottom: '8px', color: '#fff' }}>Ferramentas</div>
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '0.875rem' }}>
+              {[['Gerador Loto 5/90', 'loto'], ['Estatísticas', 'loto'], ['Histórico', 'loto'], ['Totobola', 'totobola'], ['Simulador de prémios', 'premios']].map(([label, t]) => (
+                <li key={label}><button onClick={() => setTab(t as Tab)} style={{ background: 'none', border: 'none', color: '#9CA3AF', cursor: 'pointer', padding: 0 }} onMouseEnter={e => e.currentTarget.style.color = '#fff'} onMouseLeave={e => e.currentTarget.style.color = '#9CA3AF'}>{label}</button></li>
+              ))}
             </ul>
           </div>
           <div>
-            <div className="font-bold mb-2 text-white">Legal</div>
-            <ul className="space-y-1 text-sm">
-              <li><button onClick={() => setShowTerms(true)} className="hover:text-white">Termos de uso</button></li>
-              <li><button onClick={() => setShowPrivacy(true)} className="hover:text-white">Política de privacidade</button></li>
-              <li><button onClick={() => setShowResponsible(true)} className="hover:text-white">Jogo responsável</button></li>
+            <div style={{ fontWeight: 700, marginBottom: '8px', color: '#fff' }}>Legal</div>
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '0.875rem' }}>
+              {[['Termos de uso', () => setShowTerms(true)], ['Política de privacidade', () => setShowPrivacy(true)], ['Jogo responsável', () => setShowResponsible(true)]].map(([label, fn]) => (
+                <li key={String(label)}><button onClick={fn as () => void} style={{ background: 'none', border: 'none', color: '#9CA3AF', cursor: 'pointer', padding: 0 }} onMouseEnter={e => e.currentTarget.style.color = '#fff'} onMouseLeave={e => e.currentTarget.style.color = '#9CA3AF'}>{String(label)}</button></li>
+              ))}
             </ul>
           </div>
           <div>
-            <div className="font-bold mb-2 text-white">Oficial</div>
-            <p className="text-sm text-neutral-300 mb-2">
-              Para informação oficial e resultados em tempo real, consulte sempre a entidade gestora:
-            </p>
-            <a href={WEBSITE} target="_blank" rel="noopener noreferrer"
-              className="inline-block px-3 py-2 rounded-xl bg-red-600 text-white text-sm font-bold hover:bg-red-700 transition">
-              🌐 {CONCESSIONAIRE}
-            </a>
-            <div className="mt-3 inline-flex items-center gap-2 bg-amber-500 text-neutral-900 font-bold px-3 py-2 rounded-xl text-sm ml-2">
-              +18 · Responsabilidade
-            </div>
+            <div style={{ fontWeight: 700, marginBottom: '8px', color: '#fff' }}>Oficial</div>
+            <p style={{ fontSize: '0.875rem', marginBottom: '8px' }}>Para informação oficial e resultados em tempo real, consulte sempre a entidade gestora:</p>
+            <a href={WEBSITE} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-block', padding: '8px 12px', borderRadius: '12px', background: '#DC2626', color: '#fff', fontSize: '0.875rem', fontWeight: 700, textDecoration: 'none' }}>🌐 {CONCESSIONAIRE}</a>
+            <div style={{ marginTop: '12px', display: 'inline-flex', alignItems: 'center', gap: '8px', background: '#F59E0B', color: '#111827', fontWeight: 700, padding: '8px 12px', borderRadius: '12px', fontSize: '0.875rem', marginLeft: '8px' }}>+18 · Responsabilidade</div>
           </div>
         </div>
-        <div className="border-t border-neutral-800">
-          <div className="max-w-6xl mx-auto px-4 py-4 text-xs text-neutral-400 text-center">
-            © {new Date().getFullYear()} {APP_NAME} · {APP_SLOGAN} · Angola —
-            Ferramenta educativa e de entretenimento. Não emite, vende ou promove apostas.
-            Ao abrigo da {LEGAL_REF} · {DECREE_REF}.
+        <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+          <div className="max-w-6xl mx-auto px-4 py-4" style={{ fontSize: '0.75rem', color: '#4B5563', textAlign: 'center' }}>
+            © {new Date().getFullYear()} {APP_NAME} · {APP_SLOGAN} · Angola — Ferramenta educativa e de entretenimento. Não emite, vende ou promove apostas. Ao abrigo da {LEGAL_REF} · {DECREE_REF}.
           </div>
         </div>
       </footer>
 
-      {/* ── Modais ── */}
+      {/* ── MODAIS ── */}
       <Modal open={showTerms} onClose={() => setShowTerms(false)} title="Termos de uso">
         <ul className="list-disc pl-5 space-y-2 text-sm">
           <li>Idade mínima de 18 anos e residência em jurisdição onde o acesso é permitido por lei.</li>
@@ -1884,193 +1962,92 @@ export default function App() {
           <li>Armazenamento local apenas (<code>localStorage</code>) para preferências e favoritos. Nenhum dado pessoal identificável é recolhido ou transmitido.</li>
           <li>Não há partilha de informação com terceiros, exceto quando exigida por lei.</li>
           <li>Pode apagar os dados locais a qualquer momento nas configurações do seu browser.</li>
-          <li>Em conformidade com a Lei n.º 22/11 de Protecção de Dados Pessoais de Angola e boas práticas internacionais (RGPD).</li>
+          <li>Em conformidade com a Lei n.º 22/11 de Protecção de Dados Pessoais de Angola.</li>
         </ul>
       </Modal>
 
       <Modal open={showHelp} onClose={() => setShowHelp(false)} title="Como funciona o gerador?">
         <ol className="list-decimal pl-5 space-y-3 text-sm">
-          <li><strong>Equilibrado:</strong> escolhe um número por cada faixa de 18 (1-18, 19-36, 37-54, 55-72, 73-90), para cobrir o espaço amostral de forma distribuída.</li>
-          <li><strong>Frequência histórica:</strong> pesos maiores para os números mais frequentes nos últimos sorteios. Viés estatístico — não aumenta probabilidades reais.</li>
-          <li><strong>Monte Carlo:</strong> pesos históricos com adição de ruído gaussiano (Box-Muller), criando combinações diversas e menos enviesadas.</li>
-          <li><strong>Aleatório puro:</strong> todas as C(90,5) = {probs.total.toLocaleString('pt-AO')} combinações são igualmente prováveis. Matematicamente idêntico ao sorteio real.</li>
+          <li><strong>Equilibrado:</strong> escolhe um número por cada faixa de 18 (1-18, 19-36, 37-54, 55-72, 73-90).</li>
+          <li><strong>Kazola:</strong> método baseado em padrões históricos e tendências identificadas nos sorteios reais.</li>
+          <li><strong>Frequência histórica:</strong> pesos maiores para os números mais frequentes nos últimos sorteios.</li>
+          <li><strong>Monte Carlo:</strong> pesos históricos com adição de ruído gaussiano (Box-Muller).</li>
         </ol>
-        <p className="text-sm text-neutral-600 pt-3 border-t mt-3">
-          <strong>Importante:</strong> nenhum método prevê o futuro. As opções modelam apenas preferências de selecção, não aumentam a probabilidade de ganhar.
-        </p>
+        <p className="text-sm text-neutral-600 dark:text-neutral-400 pt-3 border-t mt-3 border-neutral-200 dark:border-neutral-800"><strong>Importante:</strong> nenhum método prevê o futuro.</p>
       </Modal>
 
-      {/* MODAL 1 - AUTOAVALIAÇÃO */}
       <Modal open={modalResponsavel === 'autoavaliacao'} onClose={() => setModalResponsavel(null)} title="📋 Autoavaliação - Hábitos de Jogo">
         <div className="space-y-4 text-sm">
-          <p className="font-bold text-emerald-800">Responda com sinceridade para avaliar os seus hábitos:</p>
-
-          <div className="space-y-4">
-            <div className="bg-neutral-50 p-3 rounded-xl">
-              <p className="font-semibold mb-2">1. Com que frequência joga?</p>
+          <p className="font-bold text-emerald-800 dark:text-emerald-400">Responda com sinceridade para avaliar os seus hábitos:</p>
+          {[
+            { key: 'q1', question: '1. Com que frequência joga?', opts: ['Nunca', 'Raramente', 'Às vezes', 'Frequentemente'] },
+            { key: 'q2', question: '2. Já tentou reduzir ou parar sem sucesso?', opts: ['Nunca', 'Uma vez', 'Várias vezes'] },
+            { key: 'q3', question: '3. Já escondeu ou mentiu sobre o quanto joga?', opts: ['Não', 'Sim, uma vez', 'Sim, várias'] },
+            { key: 'q4', question: '4. Costuma gastar mais tempo ou dinheiro do que planeia?', opts: ['Nunca', 'Raramente', 'Às vezes', 'Frequentemente'] },
+            { key: 'q5', question: '5. Já sentiu que o jogo afetou negativamente as suas finanças ou relações?', opts: ['Não', 'Sim, ligeiramente', 'Sim, significativamente'] },
+          ].map(({ key, question, opts }) => (
+            <div key={key} className="bg-neutral-50 dark:bg-[#0f3460] p-3 rounded-xl">
+              <p className="font-semibold mb-2 dark:text-white">{question}</p>
               <div className="flex gap-3 flex-wrap">
-                {['Nunca', 'Raramente', 'Às vezes', 'Frequentemente'].map(opt => (
-                  <label key={opt} className="flex items-center gap-1 text-xs">
-                    <input type="radio" name="q1" value={opt} onChange={(e) => setAutoavaliacaoRespostas({ ...autoavaliacaoRespostas, q1: e.target.value })} />
+                {opts.map(opt => (
+                  <label key={opt} className="flex items-center gap-1 text-xs dark:text-neutral-300">
+                    <input type="radio" name={key} value={opt} onChange={e => setAutoavaliacaoRespostas(prev => ({ ...prev, [key]: e.target.value }))} />
                     {opt}
                   </label>
                 ))}
               </div>
             </div>
-
-            <div className="bg-neutral-50 p-3 rounded-xl">
-              <p className="font-semibold mb-2">2. Já tentou reduzir ou parar sem sucesso?</p>
-              <div className="flex gap-3 flex-wrap">
-                {['Nunca', 'Uma vez', 'Várias vezes'].map(opt => (
-                  <label key={opt} className="flex items-center gap-1 text-xs">
-                    <input type="radio" name="q2" value={opt} onChange={(e) => setAutoavaliacaoRespostas({ ...autoavaliacaoRespostas, q2: e.target.value })} />
-                    {opt}
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            <div className="bg-neutral-50 p-3 rounded-xl">
-              <p className="font-semibold mb-2">3. Já escondeu ou mentiu sobre o quanto joga?</p>
-              <div className="flex gap-3 flex-wrap">
-                {['Não', 'Sim, uma vez', 'Sim, várias'].map(opt => (
-                  <label key={opt} className="flex items-center gap-1 text-xs">
-                    <input type="radio" name="q3" value={opt} onChange={(e) => setAutoavaliacaoRespostas({ ...autoavaliacaoRespostas, q3: e.target.value })} />
-                    {opt}
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            <div className="bg-neutral-50 p-3 rounded-xl">
-              <p className="font-semibold mb-2">4. Costuma gastar mais tempo ou dinheiro do que planeia?</p>
-              <div className="flex gap-3 flex-wrap">
-                {['Nunca', 'Raramente', 'Às vezes', 'Frequentemente'].map(opt => (
-                  <label key={opt} className="flex items-center gap-1 text-xs">
-                    <input type="radio" name="q4" value={opt} onChange={(e) => setAutoavaliacaoRespostas({ ...autoavaliacaoRespostas, q4: e.target.value })} />
-                    {opt}
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            <div className="bg-neutral-50 p-3 rounded-xl">
-              <p className="font-semibold mb-2">5. Já sentiu que o jogo afetou negativamente as suas finanças ou relações?</p>
-              <div className="flex gap-3 flex-wrap">
-                {['Não', 'Sim, ligeiramente', 'Sim, significativamente'].map(opt => (
-                  <label key={opt} className="flex items-center gap-1 text-xs">
-                    <input type="radio" name="q5" value={opt} onChange={(e) => setAutoavaliacaoRespostas({ ...autoavaliacaoRespostas, q5: e.target.value })} />
-                    {opt}
-                  </label>
-                ))}
-              </div>
-            </div>
-          </div>
-
+          ))}
           {autoavaliacaoFeedback && (
-            <div className={`p-4 rounded-xl ${
-              autoavaliacaoFeedback.cor === 'red' ? 'bg-red-50 border border-red-200' :
-              autoavaliacaoFeedback.cor === 'amber' ? 'bg-amber-50 border border-amber-200' :
-              'bg-green-50 border border-green-200'
-            }`}>
+            <div className={`p-4 rounded-xl ${autoavaliacaoFeedback.cor === 'red' ? 'bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800' : autoavaliacaoFeedback.cor === 'amber' ? 'bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800' : 'bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800'}`}>
               <div className="font-bold text-base mb-1">{autoavaliacaoFeedback.nivel}</div>
               <p className="text-sm mb-2">{autoavaliacaoFeedback.mensagem}</p>
               <p className="text-xs font-medium">{autoavaliacaoFeedback.acao}</p>
             </div>
           )}
-
-          <button onClick={() => setModalResponsavel(null)} className="w-full py-2 bg-emerald-600 text-white rounded-xl font-semibold text-sm">
-            Fechar
-          </button>
+          <button onClick={() => setModalResponsavel(null)} className="w-full py-2 bg-emerald-600 text-white rounded-xl font-semibold text-sm">Fechar</button>
         </div>
       </Modal>
 
-      {/* MODAL 2 - LIMITES DE TEMPO */}
-      <Modal open={modalResponsavel === 'limites'} onClose={() => setModalResponsavel(null)} title="⏱️ Limites de tempo - Controle sua sessão">
+      <Modal open={modalResponsavel === 'limites'} onClose={() => setModalResponsavel(null)} title="⏱️ Limites de tempo">
         <div className="space-y-4 text-sm">
-          <p className="font-bold text-emerald-800">Defina limites saudáveis para manter o controle:</p>
-
-          <div className="bg-emerald-50 p-4 rounded-xl">
-            <p className="font-semibold mb-2">⏰ Temporizador:</p>
+          <div className="bg-emerald-50 dark:bg-emerald-950 p-4 rounded-xl">
+            <p className="font-semibold mb-2 dark:text-white">⏰ Temporizador:</p>
             <div className="flex gap-2 flex-wrap">
               {[15, 30, 45, 60].map(min => (
-                <button
-                  key={min}
-                  onClick={() => iniciarTimer(min)}
-                  className="px-3 py-2 bg-white rounded-lg ring-1 ring-emerald-300 text-emerald-700 text-sm font-semibold hover:bg-emerald-100 transition"
-                >
-                  ⏱️ {min} min
-                </button>
+                <button key={min} onClick={() => iniciarTimer(min)} className="px-3 py-2 bg-white dark:bg-[#1a2a4a] rounded-lg ring-1 ring-emerald-300 dark:ring-emerald-700 text-emerald-700 dark:text-emerald-300 text-sm font-semibold hover:bg-emerald-100 dark:hover:bg-emerald-900 transition">⏱️ {min} min</button>
               ))}
             </div>
-            {timerAtivo && timerMinutos !== null && (
-              <div className="mt-3 p-2 bg-emerald-200 rounded-lg text-center font-bold">
-                ⏰ Temporizador ativo: {timerMinutos} minutos restantes
-              </div>
-            )}
+            {timerAtivo && timerMinutos !== null && <div className="mt-3 p-2 bg-emerald-200 dark:bg-emerald-800 rounded-lg text-center font-bold dark:text-white">⏰ Temporizador ativo: {timerMinutos} minutos restantes</div>}
           </div>
-
-          <ul className="list-disc pl-5 space-y-2">
-            <li>Defina um <strong>tempo máximo por sessão</strong> (ex: 15-30 minutos)</li>
-            <li>Use <strong>alarmes no telemóvel</strong> para controlar a duração</li>
-            <li>Faça <strong>pausas de 5 minutos</strong> a cada 20 minutos</li>
-            <li>Não jogue em horários que possam interferir com o trabalho ou família</li>
-          </ul>
-
-          <div className="bg-blue-50 p-3 rounded-xl">
-            <p className="font-semibold text-blue-800">📝 Dica:</p>
-            <p className="text-xs text-blue-700 mt-1">Registe num diário o tempo gasto em cada sessão.</p>
-          </div>
-
-          <button onClick={() => setModalResponsavel(null)} className="w-full py-2 bg-emerald-600 text-white rounded-xl font-semibold text-sm">
-            Entendi, vou aplicar estes limites
-          </button>
+          <button onClick={() => setModalResponsavel(null)} className="w-full py-2 bg-emerald-600 text-white rounded-xl font-semibold text-sm">Entendi, vou aplicar estes limites</button>
         </div>
       </Modal>
 
-      {/* MODAL 3 - PERÍODO DE REFLEXÃO */}
-      <Modal open={modalResponsavel === 'reflexao'} onClose={() => setModalResponsavel(null)} title="🚪 Período de reflexão - Faça uma pausa">
+      <Modal open={modalResponsavel === 'reflexao'} onClose={() => setModalResponsavel(null)} title="🚪 Período de reflexão">
         <div className="space-y-4 text-sm">
-          <p className="font-bold text-emerald-800">Afaste-se temporariamente se sentir necessidade:</p>
-
-          <div className="bg-amber-50 p-4 rounded-xl">
-            <p className="font-semibold mb-2">⏸️ Escolha o período de afastamento:</p>
+          <div className="bg-amber-50 dark:bg-amber-950 p-4 rounded-xl">
+            <p className="font-semibold mb-2 dark:text-white">⏸️ Escolha o período:</p>
             <div className="flex gap-2 flex-wrap">
-              <button onClick={() => iniciarPeriodoReflexao(1)} className="px-3 py-2 bg-white rounded-lg ring-1 ring-amber-300 text-amber-700 text-sm font-semibold hover:bg-amber-100 transition">24 horas</button>
-              <button onClick={() => iniciarPeriodoReflexao(7)} className="px-3 py-2 bg-white rounded-lg ring-1 ring-amber-300 text-amber-700 text-sm font-semibold hover:bg-amber-100 transition">7 dias</button>
-              <button onClick={() => iniciarPeriodoReflexao(30)} className="px-3 py-2 bg-white rounded-lg ring-1 ring-amber-300 text-amber-700 text-sm font-semibold hover:bg-amber-100 transition">30 dias</button>
+              {[1, 7, 30].map(d => (
+                <button key={d} onClick={() => iniciarPeriodoReflexao(d)} className="px-3 py-2 bg-white dark:bg-[#1a2a4a] rounded-lg ring-1 ring-amber-300 dark:ring-amber-700 text-amber-700 dark:text-amber-300 text-sm font-semibold hover:bg-amber-100 dark:hover:bg-amber-900 transition">{d === 1 ? '24 horas' : `${d} dias`}</button>
+              ))}
             </div>
           </div>
-
-          <ul className="list-disc pl-5 space-y-2">
-            <li><strong>Autoexclusão temporária</strong> - afaste-se por 24h, 7 dias ou 30 dias</li>
-            <li><strong>Registe num diário</strong> os sentimentos que levam ao jogo</li>
-            <li><strong>Substitua o hábito</strong> por outra atividade</li>
-            <li><strong>Converse com alguém de confiança</strong> sobre o que sente</li>
-          </ul>
-
-          <div className="bg-red-50 p-3 rounded-xl">
-            <p className="font-semibold text-red-800">📞 Precisa de ajuda?</p>
-            <p className="text-xs text-red-700 mt-1">Contacte o Instituto de Supervisão de Jogos (ISJ) para apoio profissional.</p>
+          <div className="bg-red-50 dark:bg-red-950 p-3 rounded-xl">
+            <p className="font-semibold text-red-800 dark:text-red-300">📞 Precisa de ajuda?</p>
+            <p className="text-xs text-red-700 dark:text-red-400 mt-1">Contacte o Instituto de Supervisão de Jogos (ISJ) para apoio profissional.</p>
           </div>
-
-          <button onClick={() => setModalResponsavel(null)} className="w-full py-2 bg-emerald-600 text-white rounded-xl font-semibold text-sm">
-            Compreendo, vou refletir
-          </button>
+          <button onClick={() => setModalResponsavel(null)} className="w-full py-2 bg-emerald-600 text-white rounded-xl font-semibold text-sm">Compreendo, vou refletir</button>
         </div>
       </Modal>
 
-      {/* Modal de confirmação de período de reflexão */}
       <Modal open={showReflectionConfirm} onClose={() => setShowReflectionConfirm(false)} title="✅ Período de reflexão iniciado">
         <div className="space-y-4 text-center">
           <div className="text-5xl">🧘</div>
-          <p className="font-bold text-emerald-800">O seu período de reflexão foi registado!</p>
-          <p className="text-sm">
-            Durante <strong>{reflectionDays} dias</strong>, recomendamos que mantenha distância do jogo.
-          </p>
-          <button onClick={() => setShowReflectionConfirm(false)} className="w-full py-2 bg-emerald-600 text-white rounded-xl font-semibold text-sm">
-            Fechar
-          </button>
+          <p className="font-bold text-emerald-800 dark:text-emerald-400">O seu período de reflexão foi registado!</p>
+          <p className="text-sm dark:text-neutral-300">Durante <strong>{reflectionDays} dias</strong>, recomendamos que mantenha distância do jogo.</p>
+          <button onClick={() => setShowReflectionConfirm(false)} className="w-full py-2 bg-emerald-600 text-white rounded-xl font-semibold text-sm">Fechar</button>
         </div>
       </Modal>
 
@@ -2078,30 +2055,32 @@ export default function App() {
         <PrizeCalculator />
       </Modal>
 
-      {/* Modais Premium */}
       {showLogin && <LoginModal onClose={() => setShowLogin(false)} />}
       <TrialExpiredModal />
 
-      {/* ── CHATBOT ── */}
-      <ChatBot 
-        session={session}
-        onUpgrade={() => setShowUpgrade(true)}
-        onLogin={() => setShowGate(true)}
-        onScrollTo={handleChatScrollTo}
-        onOpenModal={handleChatOpenModal}
+      <ChatBot session={session} onUpgrade={() => setShowUpgrade(true)} onLogin={() => setShowGate(true)} onScrollTo={handleChatScrollTo} onOpenModal={handleChatOpenModal} />
+
+      {/* ── ADMIN DRAWER ── */}
+      <AdminDrawer
+        pendingSessions={[]}
+        onConsolidate={(id, result, hits) => { console.log('Admin consolidar:', id, result, hits); }}
       />
 
-      {/* TOAST NOTIFICATIONS */}
-      {toast && (
-        <div className="fixed bottom-4 right-4 z-50 animate-slide-in">
-          <div className={`px-4 py-3 rounded-lg shadow-lg text-white ${
-            toast.type === 'error' ? 'bg-red-600' : 
-            toast.type === 'success' ? 'bg-green-600' : 'bg-blue-600'
-          }`}>
-            {toast.msg}
-          </div>
-        </div>
-      )}
+      {/* ── TOAST ── */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div 
+            initial={{ opacity: 0, y: 50, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 50, scale: 0.9 }}
+            style={{ position: 'fixed', bottom: '16px', right: '16px', zIndex: 50 }}
+          >
+            <div style={{ padding: '12px 16px', borderRadius: '12px', boxShadow: '0 8px 32px rgba(0,0,0,0.4)', color: '#fff', fontWeight: 600, background: toast.type === 'error' ? '#DC2626' : toast.type === 'success' ? '#059669' : '#2563EB' }}>
+              {toast.msg}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
