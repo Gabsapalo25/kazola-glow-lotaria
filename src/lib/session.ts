@@ -1,7 +1,7 @@
 /**
  * session.ts — Gestão de sessões freemium + Pagamentos Premium
  * =========================================
- * FREE  : trial 3 dias · 1 geração por dia
+ * FREE  : trial 3 dias · 3 gerações por dia (ajustado para melhor experiência)
  * PREMIUM: ilimitado · sem restrições
  *
  * CORRECÇÃO: isPremium nunca vem do localStorage — é sempre validado no servidor.
@@ -11,7 +11,7 @@
 export const STORAGE_KEY      = 'kazola_user_session';
 export const TRIAL_DAYS       = 3;
 export const TRIAL_MS         = TRIAL_DAYS * 24 * 60 * 60 * 1000;
-export const FREE_GENS_DAY    = 1;
+export const FREE_GENS_DAY    = 3;  // ✅ ALTERADO: 3 gerações por dia durante o trial
 export const PREMIUM_GENS_DAY = 999;
 
 export interface UserSession {
@@ -49,7 +49,7 @@ export function loadSession(): UserSession | null {
     if (session.ultimaVerificacao   === undefined) session.ultimaVerificacao   = null;
     
     // ===== NOVOS CAMPOS - MIGRAÇÃO =====
-    if (session.syncEnabled         === undefined) session.syncEnabled         = false;
+    if (session.syncEnabled         === undefined) session.syncEnabled         = true; // ✅ ACTIVADO POR PADRÃO
     if (session.lastSync            === undefined) session.lastSync            = null;
 
     // ─── CORRECÇÃO CRÍTICA ───────────────────────────────────────
@@ -172,15 +172,24 @@ export function trialDaysLeft(s: UserSession | null | undefined): number {
 
 export function canGenerate(s: UserSession | null | undefined): { ok: boolean; reason?: string } {
   if (!s) return { ok: false, reason: 'trial_expired' };
-  if (!s.isPremium && !isTrialActive(s)) {
+  
+  // Premium pode gerar sempre
+  if (s.isPremium) return { ok: true };
+  
+  // Verificar se trial expirou
+  if (!isTrialActive(s)) {
     return { ok: false, reason: 'trial_expired' };
   }
-  if (s.isPremium) return { ok: true };
 
+  // ✅ ALTERADO: Durante trial, permite até FREE_GENS_DAY (3) gerações por dia
   const today = todayStr();
-  if (s.lastGenerationDate === today && s.generationsToday >= FREE_GENS_DAY) {
+  const isToday = s.lastGenerationDate === today;
+  const usedToday = isToday ? s.generationsToday : 0;
+  
+  if (usedToday >= FREE_GENS_DAY) {
     return { ok: false, reason: 'daily_limit' };
   }
+  
   return { ok: true };
 }
 
@@ -286,4 +295,41 @@ export function shouldSync(s: UserSession | null | undefined): boolean {
 export function needsInitialSync(s: UserSession | null | undefined): boolean {
   if (!s) return false;
   return s.syncEnabled === true && s.lastSync === null;
+}
+
+// ==================== FUNÇÕES DE ACESSO TOTAL PARA O TRIAL ====================
+
+/**
+ * hasFullAccess - Verifica se o utilizador tem acesso total (Premium ou Trial ativo)
+ * Durante os 3 dias de trial, tem acesso a TODAS as funcionalidades
+ */
+export function hasFullAccess(s: UserSession | null | undefined): boolean {
+  if (!s) return false;
+  if (s.isPremium) return true;
+  if (isTrialActive(s)) return true;  // ✅ Trial tem acesso TOTAL
+  return false;
+}
+
+/**
+ * getMaxLinesPerGeneration - Número máximo de linhas que pode gerar por vez
+ * Premium e Trial: até 10 linhas
+ * Grátis expirado: 1 linha
+ */
+export function getMaxLinesPerGeneration(s: UserSession | null | undefined): number {
+  if (!s) return 1;
+  if (s.isPremium || isTrialActive(s)) return 10;  // ✅ Trial: até 10 linhas
+  return 1;
+}
+
+/**
+ * getAvailableMethods - Métodos disponíveis para o utilizador
+ * Premium e Trial: todos os 4 métodos
+ * Grátis expirado: apenas 2 métodos básicos
+ */
+export function getAvailableMethods(s: UserSession | null | undefined): string[] {
+  if (!s) return ['equilibrado', 'kazola'];
+  if (s.isPremium || isTrialActive(s)) {
+    return ['equilibrado', 'kazola', 'frequencia', 'montecarlo'];
+  }
+  return ['equilibrado', 'kazola'];
 }

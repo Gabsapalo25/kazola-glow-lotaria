@@ -1,9 +1,9 @@
 // src/lib/apiClient.ts
 import { type Draw } from '../data/history';
+import historicoCompleto from '../data/historico_completo.json';
 
 // ==================== CONSTANTES ====================
 const KAZOLA_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxBUgEc7KtqbktpQXVxnEPW0t0ZkY5WHjzbptt8lX7EDgt-yMB8RX7sorh2RjLO_uu8xA/exec';
-const HISTORICO_JSON_URL = 'https://cdn.jsdelivr.net/gh/Gabsapalo25/kazola-dados@main/historico_completo.json';
 
 // ==================== HELPER — fetch sem CORS preflight ====================
 async function gasPost<T>(payload: object): Promise<T> {
@@ -32,108 +32,85 @@ async function gasGet<T>(params: Record<string, string>): Promise<T> {
   return response.json();
 }
 
-// ==================== SORTEIOS (BUSCA DO GITHUB) ====================
+// ==================== SORTEIOS (APENAS ARQUIVO LOCAL) ====================
 export async function fetchRealDraws(): Promise<{ draws: Draw[]; hasToday: boolean }> {
-  try {
-    console.log('📡 A carregar dados do GitHub via jsDelivr...');
-    
-    const res = await fetch(`${HISTORICO_JSON_URL}?t=${Date.now()}`);
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-    }
-    const historicoCompleto = await res.json();
-
-    const drawsMap = new Map<string, Draw>();
-    const now      = new Date();
-
-    for (const group of historicoCompleto) {
-      const date = extractDate(group.formatedDate);
-      if (new Date(date) > now) continue;
-      if (!group.results || !Array.isArray(group.results)) continue;
-
-      for (const draw of group.results) {
-        if (!draw.number_1 || !draw.number_2 || !draw.number_3 || !draw.number_4 || !draw.number_5) continue;
-
-        const horaStr    = draw.hour?.replace('H00', '').replace('h00', '') || '0';
-        const horaNum    = parseInt(horaStr);
-        const dataSorteio = new Date(date);
-        dataSorteio.setHours(horaNum, 0, 0);
-        if (dataSorteio > now) continue;
-
-        const key = `${date}-${draw.name}`;
-        if (!drawsMap.has(key)) {
-          let sessionType: 'fezada' | 'kazola' | 'aqueceu' | 'eskebra' = 'fezada';
-          const sessionName = draw.name?.toLowerCase() || '';
-          if      (sessionName.includes('kazola'))  sessionType = 'kazola';
-          else if (sessionName.includes('aqueceu')) sessionType = 'aqueceu';
-          else if (sessionName.includes('eskebra')) sessionType = 'eskebra';
-
-          drawsMap.set(key, {
-            id:      key,
-            date:    date,
-            time:    draw.hour ? draw.hour.replace('H', ':').replace('h', ':') : '--:--',
-            session: sessionType,
-            numbers: [draw.number_1, draw.number_2, draw.number_3, draw.number_4, draw.number_5]
-              .sort((a, b) => a - b),
-          });
-        }
-      }
-    }
-
-    const draws = Array.from(drawsMap.values())
-      .sort((a, b) => new Date(`${b.date}T${b.time}`).getTime()
-                    - new Date(`${a.date}T${a.time}`).getTime());
-
-    console.log(`📊 Total de sorteios ÚNICOS carregados: ${draws.length}`);
-    if (draws.length > 0) console.log('🎯 Último sorteio:', draws[0]);
-    
-    try {
-      localStorage.setItem('kazola_last_draws', JSON.stringify(draws));
-      localStorage.setItem('kazola_last_draws_date', new Date().toISOString());
-      localStorage.setItem('kazola_last_draws_ttl', String(Date.now() + 3600000));
-    } catch { /* silent */ }
-    
-    const todayStr = new Date().toISOString().split('T')[0];
-    const hasToday = draws.length > 0 && draws[0].date === todayStr;
-    
-    return { draws, hasToday };
-
-  } catch (error) {
-    console.error('❌ Erro ao buscar dados do GitHub:', error);
-    
-    try {
-      const cached = localStorage.getItem('kazola_last_draws');
-      const ttl = localStorage.getItem('kazola_last_draws_ttl');
-      
-      if (cached && ttl && Date.now() < parseInt(ttl)) {
-        console.log('📦 A usar dados em cache do localStorage');
-        return { draws: JSON.parse(cached), hasToday: false };
-      }
-    } catch { /* silent */ }
-    
+  console.log('📡 A carregar dados do arquivo LOCAL atualizado pelo scheduler...');
+  
+  if (!historicoCompleto || !Array.isArray(historicoCompleto) || historicoCompleto.length === 0) {
+    console.error('❌ Arquivo local vazio. Scheduler ainda não executou?');
     return { draws: [], hasToday: false };
   }
+
+  const drawsMap = new Map<string, Draw>();
+  const now = new Date();
+  const todayStr = now.toISOString().split('T')[0];
+
+  for (const group of historicoCompleto) {
+    if (!group.formatedDate || !group.results) continue;
+    
+    const date = extractDate(group.formatedDate);
+    if (!date || new Date(date) > now) continue;
+
+    for (const draw of group.results) {
+      if (!draw.number_1 || !draw.number_2 || !draw.number_3 || !draw.number_4 || !draw.number_5) continue;
+
+      const horaStr = draw.hour?.replace('H00', '').replace('h00', '') || '0';
+      const horaNum = parseInt(horaStr);
+      const dataSorteio = new Date(date);
+      dataSorteio.setHours(horaNum, 0, 0);
+      if (dataSorteio > now) continue;
+
+      const key = `${date}-${draw.name}`;
+      if (!drawsMap.has(key)) {
+        let sessionType: 'fezada' | 'kazola' | 'aqueceu' | 'eskebra' = 'fezada';
+        const sessionName = draw.name?.toLowerCase() || '';
+        if (sessionName.includes('kazola')) sessionType = 'kazola';
+        else if (sessionName.includes('aqueceu')) sessionType = 'aqueceu';
+        else if (sessionName.includes('eskebra')) sessionType = 'eskebra';
+
+        drawsMap.set(key, {
+          id: key,
+          date: date,
+          time: draw.hour ? draw.hour.replace('H', ':').replace('h', ':') : '--:--',
+          session: sessionType,
+          numbers: [draw.number_1, draw.number_2, draw.number_3, draw.number_4, draw.number_5].sort((a, b) => a - b),
+        });
+      }
+    }
+  }
+
+  const draws = Array.from(drawsMap.values())
+    .sort((a, b) => new Date(`${b.date}T${b.time}`).getTime() - new Date(`${a.date}T${a.time}`).getTime());
+
+  console.log(`📊 Total de sorteios carregados: ${draws.length}`);
+  if (draws.length > 0) {
+    console.log('🎯 Último sorteio:', draws[0]);
+  }
+  
+  const hasToday = draws.length > 0 && draws[0].date === todayStr;
+  
+  return { draws, hasToday };
 }
 
 function extractDate(formatedDate: string): string {
-  if (!formatedDate) return new Date().toISOString().split('T')[0];
+  if (!formatedDate) return '';
   const match = formatedDate.match(/(\d{1,2}) de (\w+) de (\d{4})/);
-  if (!match) return new Date().toISOString().split('T')[0];
+  if (!match) return '';
   const [, day, month, year] = match;
   const meses: Record<string, string> = {
-    'Janeiro': '01', 'Fevereiro': '02', 'Março': '03',    'Abril':    '04',
-    'Maio':    '05', 'Junho':    '06', 'Julho':  '07',    'Agosto':   '08',
-    'Setembro':'09', 'Outubro':  '10', 'Novembro':'11',   'Dezembro': '12',
+    'Janeiro': '01', 'Fevereiro': '02', 'Março': '03', 'Abril': '04',
+    'Maio': '05', 'Junho': '06', 'Julho': '07', 'Agosto': '08',
+    'Setembro': '09', 'Outubro': '10', 'Novembro': '11', 'Dezembro': '12',
   };
   const monthNumber = meses[month];
-  if (!monthNumber) return `${year}-01-01`;
+  if (!monthNumber) return '';
   return `${year}-${monthNumber}-${day.padStart(2, '0')}`;
 }
 
 // ==================== REGISTO DE CLIENTE ====================
 export interface RegisterClientData {
-  ref:   string;
-  name:  string;
+  ref: string;
+  name: string;
   email: string;
   plano: 'mensal' | 'anual';
 }
@@ -154,12 +131,12 @@ export async function registerClient(
 
 // ==================== VERIFICAÇÃO DE STATUS PREMIUM ====================
 export async function checkPremiumStatus(email: string): Promise<{
-  ok:         boolean;
-  isPremium:  boolean;
+  ok: boolean;
+  isPremium: boolean;
   expiracao?: string;
-  plano?:     string;
-  isAdmin?:   boolean;
-  error?:     string;
+  plano?: string;
+  isAdmin?: boolean;
+  error?: string;
 }> {
   try {
     return await gasGet({ action: 'checkPremium', email });
@@ -174,11 +151,11 @@ export async function activateToken(
   email: string,
   token: string,
 ): Promise<{
-  ok:          boolean;
-  isPremium?:  boolean;
-  expiracao?:  string;
-  plano?:      string;
-  error?:      string;
+  ok: boolean;
+  isPremium?: boolean;
+  expiracao?: string;
+  plano?: string;
+  error?: string;
 }> {
   try {
     return await gasPost({ action: 'activateToken', email, token });
@@ -190,13 +167,13 @@ export async function activateToken(
 
 // ==================== PAINEL ADMIN ====================
 export async function adminCheck(key: string): Promise<{
-  ok:              boolean;
-  totalClientes?:  number;
-  ativos?:         number;
-  pendentes?:      number;
-  expirados?:      number;
-  sistema?:        string;
-  error?:          string;
+  ok: boolean;
+  totalClientes?: number;
+  ativos?: number;
+  pendentes?: number;
+  expirados?: number;
+  sistema?: string;
+  error?: string;
 }> {
   try {
     return await gasPost({ action: 'adminCheck', key });

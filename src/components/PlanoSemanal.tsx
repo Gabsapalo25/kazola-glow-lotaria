@@ -1,4 +1,3 @@
-// src/components/PlanoSemanal.tsx
 import React, { useState, useEffect, useMemo } from 'react';
 import Card from './Card';
 import Ball from './Ball';
@@ -38,7 +37,6 @@ const diasSemana = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado',
 const gerarCombinacaoPonderada = (weights: number[]): number[] => {
   const total = weights.reduce((a, b) => a + b, 0);
   if (total === 0) {
-    // Fallback para distribuição uniforme
     const nums: number[] = [];
     while (nums.length < 5) {
       const n = Math.floor(Math.random() * 90) + 1;
@@ -171,7 +169,6 @@ const PlanoSemanal: React.FC<PlanoSemanalProps> = ({
       const dataAposta = new Date(inicioSemana);
       dataAposta.setDate(inicioSemana.getDate() + i);
       
-      // Estratégia baseada no dia
       let estrategia = 'equilibrada';
       if (i % 3 === 0 && hotCold.hot.length > 0) estrategia = 'hot';
       else if (i % 3 === 1 && hotCold.cold.length > 0) estrategia = 'cold';
@@ -268,7 +265,6 @@ const PlanoSemanal: React.FC<PlanoSemanalProps> = ({
     if (window.confirm('Tens a certeza que queres limpar todo o plano semanal?')) {
       await salvarPlano([]);
       if (shouldSync(session)) {
-        // Nota: Limpeza em massa seria melhor implementada no backend
         for (const aposta of plano) {
           try {
             await deleteUserData(session.email, aposta.id, 'plano_semanal');
@@ -311,56 +307,86 @@ const PlanoSemanal: React.FC<PlanoSemanalProps> = ({
   const principais = plano.filter(aposta => aposta.tipo === 'main').length;
   const reservas = plano.filter(aposta => aposta.tipo === 'backup').length;
 
-  // Estilos inline
-  const glassCardStyle = {
+  // Estilos com bordas verdes
+  const glassCardStyle: React.CSSProperties = {
     background: 'rgba(17, 24, 39, 0.7)',
     backdropFilter: 'blur(12px)',
-    border: '1px solid rgba(255, 255, 255, 0.08)',
-    borderRadius: '12px'
+    border: '1px solid rgba(0, 245, 160, 0.4)',
+    borderRadius: '16px',
+    padding: '20px',
   };
 
-  const inputStyle = {
-    background: 'rgba(0, 0, 0, 0.3)',
-    color: '#F3F4F6',
-    border: '1px solid rgba(255, 255, 255, 0.12)',
+  const inputStyle: React.CSSProperties = {
+    background: 'rgba(0, 0, 0, 0.4)',
+    color: '#E5E7EB',
+    border: '1px solid rgba(0, 245, 160, 0.4)',
     borderRadius: '10px',
     padding: '8px 12px',
     fontSize: '14px',
-    outline: 'none'
+    outline: 'none',
+    width: '100%',
   };
 
-  const buttonCancelStyle = {
-    width: '100%',
-    marginTop: '12px',
-    minHeight: '44px',
+  const numberInputStyle: React.CSSProperties = {
+    width: '60px',
+    textAlign: 'center',
+    fontWeight: 700,
+    fontSize: '16px',
+    padding: '8px 4px',
+    borderRadius: '10px',
+    border: '1px solid rgba(0, 245, 160, 0.5)',
+    background: 'rgba(0, 0, 0, 0.5)',
+    color: '#00F5A0',
+    outline: 'none',
+    transition: 'all 0.2s ease',
+  };
+
+  const buttonStyle: React.CSSProperties = {
+    background: 'linear-gradient(135deg, #00F5A0, #00C896)',
+    color: '#0B0F19',
+    fontWeight: 800,
+    fontSize: '16px',
+    borderRadius: '16px',
+    border: 'none',
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+    padding: '14px 20px',
+  };
+
+  const buttonCancelStyle: React.CSSProperties = {
     background: 'rgba(17, 24, 39, 0.7)',
-    border: '1px solid rgba(255, 255, 255, 0.12)',
+    border: '1px solid rgba(0, 245, 160, 0.4)',
     color: '#F3F4F6',
     fontWeight: 700,
     borderRadius: '16px',
     cursor: 'pointer',
-    transition: 'all 0.2s'
+    transition: 'all 0.2s',
+    padding: '14px 20px',
   };
 
   return (
     <div className="space-y-6">
       {sincronizando && (
-        <div style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '12px', padding: '12px', marginBottom: '16px', textAlign: 'center', color: '#60a5fa', fontSize: '14px' }}>
+        <div style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(0, 245, 160, 0.3)', borderRadius: '12px', padding: '12px', textAlign: 'center', color: '#60a5fa', fontSize: '14px' }}>
           🔄 A sincronizar com o servidor...
         </div>
       )}
       {erroSync && (
-        <div style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: '12px', padding: '12px', marginBottom: '16px', textAlign: 'center', color: '#fbbf24', fontSize: '14px' }}>
+        <div style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(0, 245, 160, 0.3)', borderRadius: '12px', padding: '12px', textAlign: 'center', color: '#fbbf24', fontSize: '14px' }}>
           ⚠️ {erroSync}
         </div>
       )}
       {shouldSync(session) && !sincronizando && (
-        <div style={{ background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: '12px', padding: '8px', marginBottom: '16px', textAlign: 'center', color: '#4ade80', fontSize: '12px' }}>
+        <div style={{ background: 'rgba(0,245,160,0.1)', border: '1px solid rgba(0,245,160,0.3)', borderRadius: '12px', padding: '8px', textAlign: 'center', color: '#00F5A0', fontSize: '12px' }}>
           ☁️ Plano sincronizado na nuvem — disponível em todos os dispositivos
         </div>
       )}
 
-      <Card title="📅 Plano Semanal de Apostas" icon={<span>📅</span>}>
+      <div style={glassCardStyle}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+          <span style={{ fontSize: '20px' }}>📅</span>
+          <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#00F5A0' }}>Plano Semanal de Apostas</h3>
+        </div>
         <p style={{ color: '#6B7280', marginBottom: '24px', fontSize: '14px' }}>
           Gera um plano de apostas para a semana com base nas tuas estatísticas. 
           Podes editar, marcar como executado ou eliminar cada aposta.
@@ -377,9 +403,8 @@ const PlanoSemanal: React.FC<PlanoSemanalProps> = ({
               value={apostasMain}
               onChange={(e) => setApostasMain(Math.min(14, Math.max(1, parseInt(e.target.value) || 1)))}
               style={inputStyle}
-              className="w-full"
             />
-            <p style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px' }}>Máx 14 (uma por dia)</p>
+            <p style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px' }}>🎯 Máx 14 (uma por dia)</p>
           </div>
           <div>
             <label style={{ fontSize: '12px', fontWeight: 700, marginBottom: '4px', display: 'block', color: '#9CA3AF' }}>Apostas reserva</label>
@@ -390,9 +415,8 @@ const PlanoSemanal: React.FC<PlanoSemanalProps> = ({
               value={apostasBackup}
               onChange={(e) => setApostasBackup(Math.min(7, Math.max(0, parseInt(e.target.value) || 0)))}
               style={inputStyle}
-              className="w-full"
             />
-            <p style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px' }}>Máx 7</p>
+            <p style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px' }}>📌 Máx 7</p>
           </div>
           <div>
             <label style={{ fontSize: '12px', fontWeight: 700, marginBottom: '4px', display: 'block', color: '#9CA3AF' }}>Valor por aposta (Kz)</label>
@@ -404,7 +428,6 @@ const PlanoSemanal: React.FC<PlanoSemanalProps> = ({
               value={stake}
               onChange={(e) => setStake(Math.min(1000, Math.max(50, parseInt(e.target.value) || 50)))}
               style={inputStyle}
-              className="w-full"
             />
           </div>
         </div>
@@ -412,7 +435,10 @@ const PlanoSemanal: React.FC<PlanoSemanalProps> = ({
         <div className="flex gap-3">
           <button
             onClick={gerarPlano}
-            className="flex-1 min-h-[52px] bg-red-600 hover:bg-red-700 text-white font-display font-black text-lg rounded-2xl transition"
+            style={buttonStyle}
+            onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = '0 0 15px rgba(0,245,160,0.3)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'none'; }}
+            className="flex-1"
           >
             🎯 GERAR PLANO SEMANAL
           </button>
@@ -420,35 +446,35 @@ const PlanoSemanal: React.FC<PlanoSemanalProps> = ({
             <button
               onClick={limparPlano}
               style={buttonCancelStyle}
-              onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255, 75, 75, 0.2)'; e.currentTarget.style.borderColor = '#FF4B4B'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(17, 24, 39, 0.7)'; e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.12)'; }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(0, 245, 160, 0.1)'; e.currentTarget.style.borderColor = '#00F5A0'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(17, 24, 39, 0.7)'; e.currentTarget.style.borderColor = 'rgba(0, 245, 160, 0.4)'; }}
             >
               🗑️ Limpar Plano
             </button>
           )}
         </div>
-      </Card>
+      </div>
 
       {/* Resumo do plano */}
       {plano.length > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div style={{ background: 'rgba(17, 24, 39, 0.7)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '12px', padding: '16px', textAlign: 'center' }}>
+          <div style={{ background: 'rgba(17, 24, 39, 0.7)', border: '1px solid rgba(0, 245, 160, 0.4)', borderRadius: '12px', padding: '16px', textAlign: 'center' }}>
             <div style={{ fontSize: '11px', color: '#6B7280', marginBottom: '4px' }}>Total de apostas</div>
             <div style={{ fontSize: '28px', fontWeight: 800, color: '#F3F4F6' }}>{plano.length}</div>
             <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px' }}>{principais} principais · {reservas} reserva</div>
           </div>
-          <div style={{ background: 'rgba(17, 24, 39, 0.7)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '12px', padding: '16px', textAlign: 'center' }}>
+          <div style={{ background: 'rgba(17, 24, 39, 0.7)', border: '1px solid rgba(0, 245, 160, 0.4)', borderRadius: '12px', padding: '16px', textAlign: 'center' }}>
             <div style={{ fontSize: '11px', color: '#6B7280', marginBottom: '4px' }}>Custo total</div>
             <div style={{ fontSize: '28px', fontWeight: 800, color: '#FF4B4B' }}>
               {custoTotal.toLocaleString('pt-AO', { style: 'currency', currency: 'AOA' })}
             </div>
           </div>
-          <div style={{ background: 'rgba(17, 24, 39, 0.7)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '12px', padding: '16px', textAlign: 'center' }}>
+          <div style={{ background: 'rgba(17, 24, 39, 0.7)', border: '1px solid rgba(0, 245, 160, 0.4)', borderRadius: '12px', padding: '16px', textAlign: 'center' }}>
             <div style={{ fontSize: '11px', color: '#6B7280', marginBottom: '4px' }}>Executadas</div>
             <div style={{ fontSize: '28px', fontWeight: 800, color: '#00F5A0' }}>{executadas}</div>
             <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px' }}>{((executadas / plano.length) * 100).toFixed(0)}% concluído</div>
           </div>
-          <div style={{ background: 'rgba(17, 24, 39, 0.7)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '12px', padding: '16px', textAlign: 'center' }}>
+          <div style={{ background: 'rgba(17, 24, 39, 0.7)', border: '1px solid rgba(0, 245, 160, 0.4)', borderRadius: '12px', padding: '16px', textAlign: 'center' }}>
             <div style={{ fontSize: '11px', color: '#6B7280', marginBottom: '4px' }}>Prémio potencial</div>
             <div style={{ fontSize: '28px', fontWeight: 800, color: '#FFD700' }}>
               {(stake * 100000).toLocaleString('pt-AO', { style: 'currency', currency: 'AOA' })}
@@ -459,7 +485,7 @@ const PlanoSemanal: React.FC<PlanoSemanalProps> = ({
       )}
 
       {/* Plano por dia */}
-      {Object.entries(apostasPorDia).map(([data, apostas], idx) => {
+      {Object.entries(apostasPorDia).map(([data, apostas]) => {
         const dataObj = new Date(data);
         const diaSemana = diasSemana[dataObj.getDay()];
         const dataFormatada = dataObj.toLocaleDateString('pt-PT');
@@ -467,24 +493,24 @@ const PlanoSemanal: React.FC<PlanoSemanalProps> = ({
         if (apostas.length === 0) return null;
         
         return (
-          <Card key={data} title={`${diaSemana}, ${dataFormatada}`} icon={<span>📆</span>}>
+          <div key={data} style={glassCardStyle}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+              <span style={{ fontSize: '20px' }}>📆</span>
+              <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#00F5A0' }}>{diaSemana}, {dataFormatada}</h3>
+            </div>
             <div className="space-y-3">
               {apostas.map((aposta) => (
-                <div key={aposta.id} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '8px', padding: '12px' }}>
+                <div key={aposta.id} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(0, 245, 160, 0.3)', borderRadius: '12px', padding: '12px' }}>
                   <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
                     <div className="flex items-center gap-2">
-                      <span className={`px-2 py-1 rounded-full text-xs font-bold ${
-                        aposta.tipo === 'main' 
-                          ? 'bg-blue-100 text-blue-700' 
-                          : 'bg-amber-100 text-amber-700'
-                      }`} style={aposta.tipo === 'main' 
-                        ? { background: 'rgba(59,130,246,0.2)', color: '#60a5fa', borderRadius: '999px', padding: '4px 8px', fontSize: '11px', fontWeight: 700 }
-                        : { background: 'rgba(245,158,11,0.2)', color: '#fbbf24', borderRadius: '999px', padding: '4px 8px', fontSize: '11px', fontWeight: 700 }
+                      <span style={aposta.tipo === 'main' 
+                        ? { background: 'rgba(59,130,246,0.2)', color: '#60a5fa', borderRadius: '999px', padding: '4px 8px', fontSize: '11px', fontWeight: 700, border: '1px solid rgba(96,165,250,0.3)' }
+                        : { background: 'rgba(245,158,11,0.2)', color: '#fbbf24', borderRadius: '999px', padding: '4px 8px', fontSize: '11px', fontWeight: 700, border: '1px solid rgba(251,191,36,0.3)' }
                       }>
                         {aposta.tipo === 'main' ? '🎯 Principal' : '📌 Reserva'}
                       </span>
                       <span style={{ fontSize: '11px', color: '#6B7280' }}>{aposta.estrategia}</span>
-                      <span style={{ fontSize: '11px', color: '#6B7280' }}>{aposta.stake} Kz</span>
+                      <span style={{ fontSize: '11px', color: '#00F5A0' }}>{aposta.stake} Kz</span>
                     </div>
                     <div className="flex gap-2">
                       {!aposta.executado && (
@@ -521,7 +547,7 @@ const PlanoSemanal: React.FC<PlanoSemanalProps> = ({
                             max={90}
                             value={num || ''}
                             onChange={(e) => atualizarNumeroEdicao(i, e.target.value)}
-                            style={{ ...inputStyle, width: '60px', textAlign: 'center' }}
+                            style={numberInputStyle}
                           />
                         ))}
                       </div>
@@ -534,7 +560,7 @@ const PlanoSemanal: React.FC<PlanoSemanalProps> = ({
                         </button>
                         <button
                           onClick={() => { setEditandoId(null); setEditandoNumeros([]); }}
-                          style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', padding: '6px 12px', borderRadius: '8px', border: 'none', fontWeight: 700, cursor: 'pointer' }}
+                          style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', padding: '6px 12px', borderRadius: '8px', border: '1px solid rgba(0,245,160,0.3)', fontWeight: 700, cursor: 'pointer' }}
                         >
                           Cancelar
                         </button>
@@ -553,18 +579,22 @@ const PlanoSemanal: React.FC<PlanoSemanalProps> = ({
                 </div>
               ))}
             </div>
-          </Card>
+          </div>
         );
       })}
 
       {plano.length === 0 && (
-        <Card title="📋 Plano Semanal" icon={<span>📋</span>}>
+        <div style={glassCardStyle}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+            <span style={{ fontSize: '20px' }}>📋</span>
+            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#00F5A0' }}>Plano Semanal</h3>
+          </div>
           <div style={{ textAlign: 'center', padding: '32px 0' }}>
             <div style={{ fontSize: '48px', marginBottom: '12px' }}>📅</div>
             <p style={{ color: '#F3F4F6', fontWeight: 600, marginBottom: '4px' }}>Nenhum plano gerado</p>
             <p style={{ color: '#6B7280', fontSize: '14px' }}>Configura as opções acima e gera o teu plano semanal</p>
           </div>
-        </Card>
+        </div>
       )}
     </div>
   );
