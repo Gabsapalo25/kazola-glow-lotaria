@@ -1,10 +1,8 @@
 /**
- * UpgradeModal.tsx — Modal de upgrade Premium com sistema de pagamentos
- * Ecrã 1: Escolha de plano (Mensal / Anual)
- * Ecrã 2: Dados bancários + formulário de registo
- * Ecrã 3: Aguardar activação com token
- * 
- * VERSÃO V2 — Restyling com kazola-theme (lógica 100% intacta)
+ * UpgradeModal.tsx v2.5
+ * v2.5: Admin bypass — emails do dono activam premium directamente
+ *       sem chamada ao servidor e sem necessidade de pagamento
+ * v2.6: Removido botão "JÁ TENHO O MEU TOKEN" — utilizador aguarda email
  */
 import { useState } from 'react';
 import { type UserSession, activatePremiumFromServer } from '../lib/session';
@@ -18,6 +16,17 @@ interface Props {
 }
 
 type Step = 1 | 2 | 3;
+
+// ─── ADMIN BYPASS ─────────────────────────────────────────────
+const ADMIN_EMAILS = [
+  'gabsapalo20@gmail.com',
+  'glowscalepro@gmail.com',
+];
+
+function isAdminEmail(email: string): boolean {
+  return ADMIN_EMAILS.includes((email || '').trim().toLowerCase());
+}
+// ──────────────────────────────────────────────────────────────
 
 const gerarReferencia = (): string => {
   const num = Math.floor(1000 + Math.random() * 9000);
@@ -38,32 +47,49 @@ export default function UpgradeModal({ session, onUpgraded, onClose }: Props) {
 
   const handlePlanoSelect = (plano: 'mensal' | 'anual') => {
     setPlanoSeleccionado(plano);
+
+    // ✅ Admin activa premium directamente ao escolher plano
+    if (isAdminEmail(session.email)) {
+      const expiracao = '2099-12-31';
+      const upgraded  = activatePremiumFromServer(session, plano, expiracao);
+      onUpgraded(upgraded);
+      onClose();
+      return;
+    }
+
     setStep(2);
   };
 
   const handleRegistoSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!nome.trim()) {
       setError('Por favor, insere o teu nome completo');
       return;
     }
-    
     if (email !== session.email) {
       setError('O email deve corresponder ao email da tua sessão');
       return;
     }
-    
     if (!planoSeleccionado) {
       setError('Selecciona um plano primeiro');
       return;
     }
-    
+
+    // ✅ Admin bypass também aqui (salvaguarda extra)
+    if (isAdminEmail(email)) {
+      const expiracao = '2099-12-31';
+      const upgraded  = activatePremiumFromServer(session, planoSeleccionado, expiracao);
+      onUpgraded(upgraded);
+      onClose();
+      return;
+    }
+
     setLoading(true);
     setError('');
-    
+
     const ref = gerarReferencia();
-    
+
     try {
       const result = await registerClient({
         ref,
@@ -71,22 +97,18 @@ export default function UpgradeModal({ session, onUpgraded, onClose }: Props) {
         email,
         plano: planoSeleccionado,
       });
-      
+
       if (result.ok) {
         setReferencia(ref);
         setStep(3);
       } else {
         setError(result.error || 'Erro ao registar pagamento. Tenta novamente.');
       }
-    } catch (err) {
+    } catch {
       setError('Erro de conexão. Tenta novamente.');
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleOpenTokenActivation = () => {
-    setShowTokenActivation(true);
   };
 
   const handleTokenActivated = (updatedSession: UserSession) => {
@@ -107,7 +129,7 @@ export default function UpgradeModal({ session, onUpgraded, onClose }: Props) {
       }}>
         <style>{`
           @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;900&family=Russo+One&display=swap');
-          
+
           .upg-card {
             background: var(--bg-glass-strong, rgba(17, 24, 39, 0.95));
             backdrop-filter: blur(16px);
@@ -120,116 +142,74 @@ export default function UpgradeModal({ session, onUpgraded, onClose }: Props) {
             color: #fff;
             animation: gateIn 0.3s cubic-bezier(0.16,1,0.3,1);
             max-height: 90vh; overflow-y: auto;
+            position: relative;
           }
-          
+
           @keyframes gateIn {
             from { opacity:0; transform:translateY(20px) scale(0.96); }
             to   { opacity:1; transform:translateY(0) scale(1); }
           }
-          
+
           .plan-card {
             border: 2px solid rgba(255,255,255,0.08);
             border-radius: 14px; padding: 1.2rem;
             cursor: pointer; transition: all 0.2s;
             margin-bottom: 0.75rem;
           }
-          
-          .plan-card.active {
-            border-color: var(--glow-gold, #FFD700);
-            background: rgba(255, 215, 0, 0.07);
-          }
-          
-          .plan-card:hover { 
-            border-color: rgba(255, 215, 0, 0.4); 
-            transform: translateY(-2px);
-          }
-          
+          .plan-card.active { border-color: var(--glow-gold, #FFD700); background: rgba(255,215,0,0.07); }
+          .plan-card:hover  { border-color: rgba(255,215,0,0.4); transform: translateY(-2px); }
+
           .upg-input {
             width: 100%;
             background: rgba(255,255,255,0.05);
-            border: 1px solid var(--border-medium, rgba(255, 255, 255, 0.12));
-            border-radius: 10px; 
-            color: #fff;
+            border: 1px solid var(--border-medium, rgba(255,255,255,0.12));
+            border-radius: 10px; color: #fff;
             padding: 0.8rem 1rem;
             font-family: 'Barlow Condensed', sans-serif;
-            font-size: 1.05rem; 
-            outline: none;
+            font-size: 1.05rem; outline: none;
             transition: all 0.2s;
-            box-sizing: border-box; 
-            margin-top: 0.5rem;
+            box-sizing: border-box; margin-top: 0.5rem;
           }
-          
-          .upg-input:focus { 
-            border-color: var(--glow-green, #00F5A0); 
-            box-shadow: 0 0 8px rgba(0, 245, 160, 0.3);
-          }
-          
+          .upg-input:focus { border-color: var(--glow-green, #00F5A0); box-shadow: 0 0 8px rgba(0,245,160,0.3); }
+
           .upg-btn {
             width: 100%;
             background: linear-gradient(135deg, var(--glow-gold, #FFD700), #d4a800);
-            color: #0B0F19; 
-            border: none; 
-            border-radius: 10px;
+            color: #0B0F19; border: none; border-radius: 10px;
             padding: 0.95rem;
             font-family: 'Russo One', sans-serif;
-            font-size: 1rem; 
-            cursor: pointer;
+            font-size: 1rem; cursor: pointer;
             letter-spacing: 0.08em;
-            transition: all 0.2s; 
-            margin-top: 1rem;
-            position: relative;
-            overflow: hidden;
+            transition: all 0.2s; margin-top: 1rem;
+            position: relative; overflow: hidden;
           }
-          
           .upg-btn::before {
             content: '';
-            position: absolute;
-            top: 0;
-            left: -100%;
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
+            position: absolute; top: 0; left: -100%;
+            width: 100%; height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
             transition: left 0.5s ease;
           }
-          
-          .upg-btn:hover:not(:disabled)::before {
-            left: 100%;
-          }
-          
-          .upg-btn:disabled { 
-            opacity:0.6; 
-            cursor:not-allowed; 
-          }
-          
-          .upg-btn:hover:not(:disabled) {
-            transform:translateY(-1px); 
-            box-shadow: 0 6px 20px rgba(255, 215, 0, 0.3);
-          }
-          
+          .upg-btn:hover:not(:disabled)::before { left: 100%; }
+          .upg-btn:disabled { opacity:0.6; cursor:not-allowed; }
+          .upg-btn:hover:not(:disabled) { transform:translateY(-1px); box-shadow: 0 6px 20px rgba(255,215,0,0.3); }
+
           .upg-btn-ghost {
             width: 100%;
             background: transparent;
-            border: 1px solid var(--border-medium, rgba(255, 255, 255, 0.12));
+            border: 1px solid var(--border-medium, rgba(255,255,255,0.12));
             color: rgba(255,255,255,0.5);
-            border-radius: 10px; 
-            padding: 0.7rem;
+            border-radius: 10px; padding: 0.7rem;
             font-family: 'Barlow Condensed', sans-serif;
-            font-size: 0.95rem; 
-            cursor: pointer;
-            transition: all 0.2s; 
-            margin-top: 0.5rem;
+            font-size: 0.95rem; cursor: pointer;
+            transition: all 0.2s; margin-top: 0.5rem;
           }
-          
-          .upg-btn-ghost:hover { 
-            border-color: var(--glow-gold, #FFD700); 
-            color: rgba(255,255,255,0.8);
-            background: rgba(255, 215, 0, 0.05);
-          }
+          .upg-btn-ghost:hover { border-color: var(--glow-gold, #FFD700); color: rgba(255,255,255,0.8); background: rgba(255,215,0,0.05); }
         `}</style>
 
         <div className="upg-card">
           <button onClick={onClose} style={{
-            position:'absolute' as const, top:'1.2rem', right:'1.2rem',
+            position:'absolute', top:'1.2rem', right:'1.2rem',
             background:'rgba(255,255,255,0.08)', border:'none', borderRadius:'50%',
             width:32, height:32, color:'rgba(255,255,255,0.5)',
             cursor:'pointer', fontSize:'1.1rem',
@@ -241,11 +221,27 @@ export default function UpgradeModal({ session, onUpgraded, onClose }: Props) {
             <>
               <div style={{ textAlign:'center', marginBottom:'1.5rem' }}>
                 <div style={{ fontSize:'2.5rem', marginBottom:'0.4rem' }}>🏆</div>
-                <h2 style={{ fontFamily:"'Russo One',sans-serif", fontSize:'1.7rem', margin:0 }}>ESCOLHE O TEU PLANO</h2>
+                <h2 style={{ fontFamily:"'Russo One',sans-serif", fontSize:'1.7rem', margin:0 }}>
+                  {isAdminEmail(session.email) ? 'ACTIVAR COMO ADMIN' : 'ESCOLHE O TEU PLANO'}
+                </h2>
                 <p style={{ color:'rgba(255,255,255,0.4)', fontSize:'0.88rem', marginTop:'0.3rem' }}>
-                  Acesso total a todas as funcionalidades premium
+                  {isAdminEmail(session.email)
+                    ? 'Acesso vitalício — sem pagamento necessário'
+                    : 'Acesso total a todas as funcionalidades premium'}
                 </p>
               </div>
+
+              {/* Banner admin */}
+              {isAdminEmail(session.email) && (
+                <div style={{
+                  background: 'rgba(255,215,0,0.08)',
+                  border: '1px solid rgba(255,215,0,0.25)',
+                  borderRadius: 12, padding: '0.9rem 1rem',
+                  marginBottom: '1rem', fontSize: '0.85rem', color: '#FFD700',
+                }}>
+                  ✅ Email de administrador detectado. Clica em qualquer plano para activar sem pagamento.
+                </div>
+              )}
 
               {/* Plano Mensal */}
               <div className={`plan-card ${planoSeleccionado === 'mensal' ? 'active' : ''}`} onClick={() => handlePlanoSelect('mensal')}>
@@ -271,11 +267,9 @@ export default function UpgradeModal({ session, onUpgraded, onClose }: Props) {
                   <div>
                     <div style={{ display:'flex', alignItems:'center', gap:'0.5rem' }}>
                       <span style={{ fontFamily:"'Russo One',sans-serif", fontSize:'1.1rem' }}>🌟 Anual</span>
-                      <span style={{
-                        background:'#FFD700', color:'#000',
-                        borderRadius:4, padding:'1px 6px',
-                        fontSize:'0.65rem', fontWeight:900, letterSpacing:'0.08em',
-                      }}>POUPAS 10.000 Kz</span>
+                      <span style={{ background:'#FFD700', color:'#000', borderRadius:4, padding:'1px 6px', fontSize:'0.65rem', fontWeight:900, letterSpacing:'0.08em' }}>
+                        POUPAS 10.000 Kz
+                      </span>
                     </div>
                     <ul style={{ margin:'0.5rem 0 0', paddingLeft:'1rem', color:'rgba(255,255,255,0.5)', fontSize:'0.8rem' }}>
                       <li>Acesso total por 365 dias</li>
@@ -305,10 +299,9 @@ export default function UpgradeModal({ session, onUpgraded, onClose }: Props) {
                 </p>
               </div>
 
-              {/* ── BLOCO DE PAGAMENTO ── */}
               <div style={{
-                background:'rgba(255, 215, 0, 0.07)',
-                border:'1px solid rgba(255, 215, 0, 0.2)',
+                background:'rgba(255,215,0,0.07)',
+                border:'1px solid rgba(255,215,0,0.2)',
                 borderRadius:12, padding:'1.1rem', marginBottom:'1.2rem',
                 fontSize:'0.85rem', lineHeight:1.6,
               }}>
@@ -326,67 +319,38 @@ export default function UpgradeModal({ session, onUpgraded, onClose }: Props) {
                   💰 <strong>Valor a pagar:</strong> {valor}
                 </p>
 
-                {/* ── SEPARADOR ── */}
                 <div style={{ borderTop:'1px solid rgba(255,255,255,0.08)', margin:'0.75rem 0' }} />
 
-                {/* ── MCX EXPRESS ── */}
                 <div style={{
                   display:'flex', alignItems:'center', gap:'10px',
                   background:'rgba(255,140,0,0.1)',
                   border:'1px solid rgba(255,140,0,0.35)',
                   borderRadius:10, padding:'0.75rem',
                 }}>
-                  <img
-                    src="/mcx-express.png"
-                    alt="Multicaixa Express"
-                    style={{ width:42, height:42, borderRadius:9, flexShrink:0, objectFit:'cover' }}
-                  />
+                  <img src="/mcx-express.png" alt="Multicaixa Express"
+                    style={{ width:42, height:42, borderRadius:9, flexShrink:0, objectFit:'cover' }} />
                   <div>
                     <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:3 }}>
                       <span style={{ color:'#FF8C00', fontWeight:700, fontSize:'0.88rem' }}>Multicaixa Express</span>
-                      <span style={{
-                        background:'#FF8C00', color:'#000',
-                        fontSize:'0.6rem', fontWeight:900,
-                        padding:'1px 6px', borderRadius:20, letterSpacing:'0.06em',
-                      }}>RECOMENDADO</span>
+                      <span style={{ background:'#FF8C00', color:'#000', fontSize:'0.6rem', fontWeight:900, padding:'1px 6px', borderRadius:20, letterSpacing:'0.06em' }}>RECOMENDADO</span>
                     </div>
-                    <div style={{ color:'rgba(255,255,255,0.7)', fontSize:'0.8rem' }}>
-                      🔢 Número: <strong>923 379 486</strong>
-                    </div>
-                    <div style={{ color:'rgba(255,255,255,0.45)', fontSize:'0.73rem', marginTop:2 }}>
-                      ✅ Pagamento imediato · sem esperas bancárias
-                    </div>
+                    <div style={{ color:'rgba(255,255,255,0.7)', fontSize:'0.8rem' }}>🔢 Número: <strong>923 379 486</strong></div>
+                    <div style={{ color:'rgba(255,255,255,0.45)', fontSize:'0.73rem', marginTop:2 }}>✅ Pagamento imediato · sem esperas bancárias</div>
                   </div>
                 </div>
               </div>
 
               <form onSubmit={handleRegistoSubmit}>
                 <div style={{ marginBottom:'1rem' }}>
-                  <label style={{ fontSize:'0.8rem', fontWeight:700, letterSpacing:'0.1em', color:'rgba(255,255,255,0.5)' }}>
-                    NOME COMPLETO
-                  </label>
-                  <input
-                    className="upg-input"
-                    type="text"
-                    placeholder="Ex: João Manuel Silva"
-                    value={nome}
-                    onChange={e => setNome(e.target.value)}
-                    required
-                  />
+                  <label style={{ fontSize:'0.8rem', fontWeight:700, letterSpacing:'0.1em', color:'rgba(255,255,255,0.5)' }}>NOME COMPLETO</label>
+                  <input className="upg-input" type="text" placeholder="Ex: João Manuel Silva"
+                    value={nome} onChange={e => setNome(e.target.value)} required />
                 </div>
 
                 <div style={{ marginBottom:'1rem' }}>
-                  <label style={{ fontSize:'0.8rem', fontWeight:700, letterSpacing:'0.1em', color:'rgba(255,255,255,0.5)' }}>
-                    EMAIL
-                  </label>
-                  <input
-                    className="upg-input"
-                    type="email"
-                    placeholder="o.teu@email.com"
-                    value={email}
-                    onChange={e => setEmail(e.target.value)}
-                    required
-                  />
+                  <label style={{ fontSize:'0.8rem', fontWeight:700, letterSpacing:'0.1em', color:'rgba(255,255,255,0.5)' }}>EMAIL</label>
+                  <input className="upg-input" type="email" placeholder="o.teu@email.com"
+                    value={email} onChange={e => setEmail(e.target.value)} required />
                   <p style={{ fontSize:'0.7rem', color:'rgba(255,255,255,0.35)', marginTop:'0.25rem' }}>
                     Deve corresponder ao email da tua conta
                   </p>
@@ -406,11 +370,10 @@ export default function UpgradeModal({ session, onUpgraded, onClose }: Props) {
                 </button>
               </form>
 
-              {/* ── RODAPÉ DE INSTRUÇÃO ── */}
               <div style={{
                 marginTop:'1rem',
-                background:'rgba(255, 215, 0, 0.05)',
-                border:'1px solid rgba(255, 215, 0, 0.15)',
+                background:'rgba(255,215,0,0.05)',
+                border:'1px solid rgba(255,215,0,0.15)',
                 borderRadius:10, padding:'0.8rem',
                 fontSize:'0.75rem', color:'rgba(255,255,255,0.5)',
               }}>
@@ -435,8 +398,8 @@ export default function UpgradeModal({ session, onUpgraded, onClose }: Props) {
               </div>
 
               <div style={{
-                background:'rgba(255, 215, 0, 0.1)',
-                border:'1px solid rgba(255, 215, 0, 0.3)',
+                background:'rgba(255,215,0,0.1)',
+                border:'1px solid rgba(255,215,0,0.3)',
                 borderRadius:12, padding:'1rem', marginBottom:'1.2rem',
                 textAlign:'center',
               }}>
@@ -446,23 +409,34 @@ export default function UpgradeModal({ session, onUpgraded, onClose }: Props) {
                 </p>
               </div>
 
-              <p style={{ textAlign:'center', color:'rgba(255,255,255,0.6)', fontSize:'0.85rem', marginBottom:'1rem' }}>
-                O teu pagamento está a ser verificado.<br/>
-                Após confirmação receberás um email com o teu token de activação.
-              </p>
+              <div style={{
+                background:'rgba(255,215,0,0.05)',
+                border:'1px solid rgba(255,215,0,0.15)',
+                borderRadius:10, padding:'0.8rem', marginBottom:'1.2rem',
+                fontSize:'0.78rem', color:'rgba(255,255,255,0.5)',
+                textAlign:'center',
+              }}>
+                📧 O teu pagamento está a ser verificado.<br/>
+                Após confirmação receberás um email com o teu token de activação.<br/>
+                <span style={{color:'rgba(255,140,0,0.85)'}}>
+                  ⚡ Activação automática em até 5 minutos após o pagamento.
+                </span>
+                <br/>
+                💬 WhatsApp: +244 923 379 486
+              </div>
 
-              <button className="upg-btn" onClick={handleOpenTokenActivation}>
-                🔑 JÁ TENHO O MEU TOKEN
-              </button>
-              <button className="upg-btn-ghost" onClick={onClose}>
-                FECHAR
-              </button>
+              {/*
+                ✅ REMOVIDO: Botão "JÁ TENHO O MEU TOKEN"
+                O utilizador deve esperar pelo email e usar o TokenActivation
+                apenas quando receber o token real.
+              */}
+
+              <button className="upg-btn-ghost" onClick={onClose}>FECHAR</button>
             </>
           )}
         </div>
       </div>
 
-      {/* TokenActivation Modal */}
       {showTokenActivation && (
         <TokenActivation
           session={session}

@@ -797,3 +797,26 @@ h3 {
   border-radius: 50%;
   animation: pulse-green 1.5s infinite;
 }
+
+/* ============================================
+   CORRECÇÃO — SELECT / DROPDOWN OPTIONS
+   Resolve o problema de opções invisíveis em
+   selects com fundo escuro (texto branco em
+   fundo branco no dropdown nativo do browser).
+   ============================================ */
+select {
+  color-scheme: dark;
+}
+
+select option {
+  background-color: #1a1a2e;
+  color: #E5E7EB;
+  font-weight: 500;
+}
+
+select option:hover,
+select option:focus,
+select option:checked {
+  background-color: #00F5A0;
+  color: #0B0F19;
+}

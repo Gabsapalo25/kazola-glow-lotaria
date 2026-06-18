@@ -1895,7 +1895,7 @@ export default function App() {
             </div>
 
             {/* ============================================================ */}
-            {/* 6. ESTATÍSTICAS */}
+            {/* 6. ESTATÍSTICAS - CORRIGIDO COM FALLBACK E TEXTOS VISÍVEIS */}
             {/* ============================================================ */}
             <div id="estatisticas">
               <section className="grid lg:grid-cols-2 gap-6">
@@ -1918,27 +1918,41 @@ export default function App() {
                       </select>
                     </div>
                     <div className="freq-scroll" style={{ maxHeight: '700px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px', scrollbarWidth: 'thin', scrollbarColor: '#00F5A0 rgba(255,255,255,0.05)' } as React.CSSProperties}>
-                      {freq.freq.slice(1).map((c, i) => {
-                        const n = i + 1;
-                        const denom = Math.min(windowSize, draws.length) || 1;
-                        return (
-                          <div key={n} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.875rem' }}>
-                            <div style={{ width: '32px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, fontSize: '0.75rem', color: '#9CA3AF' }}>{String(n).padStart(2, '0')}</div>
-                            <div style={{ flex: 1, height: '20px', borderRadius: '6px', background: 'rgba(255,255,255,0.05)', overflow: 'hidden' }}>
-                              <motion.div 
-                                className="bar-grow" 
-                                initial={{ width: 0 }}
-                                animate={{ width: `${(c / maxFreq) * 100}%` }}
-                                transition={{ duration: 0.5, delay: i * 0.01 }}
-                                style={{ height: '100%', background: 'linear-gradient(90deg, #EF4444, #F59E0B)', position: 'relative', overflow: 'hidden' }}
-                              >
-                                <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent)', animation: 'shimmer 2s infinite' }} />
-                              </motion.div>
+                      {freq.freq && freq.freq.length > 1 ? (
+                        freq.freq.slice(1).map((c, i) => {
+                          const n = i + 1;
+                          const denom = Math.min(windowSize, draws.length) || 1;
+                          const percent = ((c / denom) * 100);
+                          const width = maxFreq > 0 ? (c / maxFreq) * 100 : 0;
+                          
+                          return (
+                            <div key={n} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.875rem' }}>
+                              <div style={{ width: '32px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, fontSize: '0.75rem', color: '#E5E7EB' }}>
+                                {String(n).padStart(2, '0')}
+                              </div>
+                              <div style={{ flex: 1, height: '20px', borderRadius: '6px', background: 'rgba(255,255,255,0.05)', overflow: 'hidden' }}>
+                                <motion.div 
+                                  className="bar-grow" 
+                                  initial={{ width: 0 }}
+                                  animate={{ width: `${width}%` }}
+                                  transition={{ duration: 0.5, delay: i * 0.01 }}
+                                  style={{ height: '100%', background: 'linear-gradient(90deg, #EF4444, #F59E0B)', position: 'relative', overflow: 'hidden' }}
+                                >
+                                  <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent)', animation: 'shimmer 2s infinite' }} />
+                                </motion.div>
+                              </div>
+                              <div style={{ width: '56px', textAlign: 'right', color: '#E5E7EB', fontSize: '0.75rem', fontWeight: 600 }}>
+                                {c}x · {percent.toFixed(0)}%
+                              </div>
                             </div>
-                            <div style={{ width: '56px', textAlign: 'right', color: '#6B7280', fontSize: '0.75rem' }}>{c}x · {((c / denom) * 100).toFixed(0)}%</div>
-                          </div>
-                        );
-                      })}
+                          );
+                        })
+                      ) : (
+                        <div style={{ textAlign: 'center', padding: '32px', color: '#6B7280' }}>
+                          <span style={{ fontSize: '2rem' }}>📊</span>
+                          <p style={{ marginTop: '8px' }}>A carregar dados de frequência...</p>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </GlowCard>
