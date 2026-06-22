@@ -1,19 +1,16 @@
 // netlify/functions/gas.cjs
-// v2.8 — proxy para Google Apps Script
+// v3.2 — adiciona logs de diagnóstico e melhor tratamento de erros
 // Nota: extensão .cjs porque package.json tem "type": "module"
 
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbzT_qa_RrCLBxsCnVEXPuAovtAtVdMXfpUTPIYnD6VRuLb5jQ-jkPIx1g-GCGAHBCzm7Q/exec';
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbwfTRO1nAX2NUJc9fL2wYDaaxonqyjfbIsWEPLR7mR-b-v9Z839srjhUIQV7AzkUFIILA/exec';
 
 // ==================== MOCK LOCAL ====================
-// Quando o GAS não é acessível localmente (ENOTFOUND),
-// devolve respostas simuladas para testar o fluxo completo.
-// Em produção o GAS é sempre contactado — o mock nunca é usado.
 const IS_DEV = process.env.NETLIFY_DEV === 'true';
 
 const MOCK_OTP_STORE = {}; // { email: code }
 
 function mockResponse(params) {
-  const { action, email, code } = params;
+  const { action, email, code, userId, budget, days } = params;
 
   switch (action) {
     case 'checkPremium':
@@ -38,6 +35,12 @@ function mockResponse(params) {
     case 'register':
       return { ok: true, ref: params.ref };
 
+    case 'registerWithPassword':
+      return { ok: true, registered: true };
+
+    case 'loginWithPassword':
+      return { ok: true, loggedIn: true, name: 'Teste', isPremium: false };
+
     case 'activateToken':
       return { ok: true, isPremium: true, expiracao: '2099-12-31', plano: 'mensal' };
 
@@ -53,6 +56,45 @@ function mockResponse(params) {
     case 'deleteUserData':
       return { ok: true, deleted: true };
 
+    case 'getMonthlySpent':
+      return { ok: true, totalSpent: 0, totalRecovered: 0 };
+
+    case 'getROI':
+      return { ok: true, roi: 0, totalSpent: 0, totalRecovered: 0 };
+
+    case 'getTopLosses':
+      return { ok: true, losses: [] };
+
+    case 'getHistoricalGaps':
+      return { ok: true, gaps: [] };
+
+    case 'getTimeline':
+      return { ok: true, data: [] };
+
+    case 'getKazolaScore':
+      return { ok: true, score: 0, status: 'N/A', date: null };
+
+    case 'getBehaviorInsights':
+      return { ok: true, insights: [] };
+
+    case 'simulatePeriod':
+      return { ok: true, totalSpent: 0, totalRecovered: 0, savings: 0, planAdherence: 0, actualSpent: 0, plannedSpent: 0 };
+
+    case 'createPlan':
+      return { 
+        ok: true, 
+        plan: [{ day: 1, bets: 2, amount: 500 }],
+        weeklyBudget: 5000,
+        dailyBudget: 714,
+        totalBets: 10
+      };
+
+    case 'logAIQuery':
+      return { ok: true, logged: true };
+
+    case 'calculateKazolaScore':
+      return { ok: true, score: 75, status: 'CONTROLLED', pillars: { disciplina: 80, planeamento: 70, orcamento: 75, consistencia: 65 } };
+
     default:
       return { ok: false, error: 'Acção desconhecida: ' + action };
   }
@@ -62,17 +104,14 @@ function mockResponse(params) {
 exports.handler = async function (event) {
   const params = event.queryStringParameters || {};
 
-  // Tentar contactar o GAS real primeiro
   if (!IS_DEV) {
-    // Em produção: sempre usar o GAS real
     return await callRealGAS(params);
   }
 
-  // Em desenvolvimento: tentar GAS real, fallback para mock se falhar
   try {
     return await callRealGAS(params);
   } catch (error) {
-    console.warn('⚠️  GAS inacessível localmente — usando mock. Erro:', error.message);
+    console.warn('⚠️ GAS inacessível localmente — usando mock. Erro:', error.message);
     const mockResult = mockResponse(params);
     console.log('📦 [MOCK] Resposta:', JSON.stringify(mockResult));
     return {
@@ -91,29 +130,80 @@ async function callRealGAS(params) {
   const qs = new URLSearchParams(params).toString();
   const url = `${GAS_URL}?${qs}`;
 
-  const response = await fetch(url, {
-    method: 'GET',
-    redirect: 'follow',
-    headers: { 'Accept': 'application/json' },
-    signal: AbortSignal.timeout(10000),
-  });
+  console.log(`🔍 Chamando GAS: ${url}`);
 
-  const text = await response.text();
-
-  let json;
   try {
-    json = JSON.parse(text);
-  } catch {
-    const cleaned = text.replace(/^[^{[]*/, '').replace(/[^}\]]*$/, '');
-    json = JSON.parse(cleaned);
-  }
+    const response = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (compatible; KazolaGlow/1.0; +https://kazola-glow.netlify.app)'
+      },
+      signal: AbortSignal.timeout(12000),
+    });
 
-  return {
-    statusCode: 200,
-    headers: {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-    },
-    body: JSON.stringify(json),
-  };
+    // ============ LOGS DE DIAGNÓSTICO ============
+    console.log(`📡 Status HTTP: ${response.status}`);
+    console.log(`📡 URL final: ${response.url}`);
+    console.log(`📡 Headers: Content-Type=${response.headers.get('content-type')}`);
+    // =============================================
+
+    const text = await response.text();
+    
+    // Log do início da resposta (para diagnóstico)
+    console.log(`📄 Início da resposta: ${text.substring(0, 200)}...`);
+
+    // Tenta parsear JSON
+    let json;
+    try {
+      json = JSON.parse(text);
+      console.log('✅ JSON parseado com sucesso');
+    } catch (parseError) {
+      console.warn('⚠️ Resposta não é JSON válido. Tentando limpar...');
+
+      // Tenta limpar a resposta (remove HTML, procura JSON)
+      const cleaned = text.replace(/^[^{[]*/, '').replace(/[^}\]]*$/, '');
+      console.log(`🧹 Texto limpo: ${cleaned.substring(0, 100)}...`);
+      
+      if (cleaned && (cleaned.startsWith('{') || cleaned.startsWith('['))) {
+        try {
+          json = JSON.parse(cleaned);
+          console.log('✅ JSON parseado após limpeza');
+        } catch (secondError) {
+          console.error('❌ Falha ao limpar JSON:', secondError.message);
+          throw new Error('Resposta do servidor não é JSON válido');
+        }
+      } else {
+        throw new Error('Resposta do servidor não contém JSON');
+      }
+    }
+
+    return {
+      statusCode: 200,
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+      },
+      body: JSON.stringify(json),
+    };
+
+  } catch (error) {
+    console.error('❌ Erro ao chamar GAS:', error.message);
+    console.error('❌ Stack:', error.stack);
+
+    // Devolve erro como JSON em vez de crash
+    return {
+      statusCode: 500,
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+      },
+      body: JSON.stringify({ 
+        ok: false, 
+        error: 'Erro ao comunicar com o servidor: ' + error.message,
+        status: 500
+      }),
+    };
+  }
 }

@@ -1,9 +1,13 @@
-// src/lib/apiClient.ts v3.1
+// src/lib/apiClient.ts v3.2
 // v3.0: Adicionadas funções registerWithPassword e loginWithPassword
 // v2.8: JSONP abandonado — usa fetch via Netlify Function (/api/gas)
 //       Elimina ERR_NETWORK_CHANGED causado pelos redirects do Google
 //       Netlify Function gas.js faz o pedido server-side ao GAS
 // v3.1: HISTORICO_URL alterado para jsDelivr + cache reduzido para 1 minuto
+// v3.2: Adicionadas funções do AI Advisor (getMonthlySpent, getROI, getTopLosses, 
+//       getHistoricalGaps, getTimeline, getKazolaScore, getBehaviorInsights, 
+//       simulatePeriod, createPlan, logAIQuery)
+// v3.3: GAS_URL atualizado para a versão 12 do deploy
 
 import { type Draw } from '../data/history';
 
@@ -124,8 +128,7 @@ export async function fetchRealDraws(): Promise<{ draws: Draw[]; hasToday: boole
 }
 
 // ==================== GAS TRANSPORT — FETCH via Netlify Function v2.8 ====================
-// Antes (v2.7): JSONP com <script> tags → Google faz redirect → ERR_NETWORK_CHANGED
-// Agora (v2.8): fetch('/api/gas') → Netlify Function gas.js → GAS (server-side, sem CORS)
+// Agora com o GAS_URL da versão 12
 // =========================================================================================
 
 async function gasRequest<T>(params: Record<string, string>): Promise<T> {
@@ -321,4 +324,191 @@ export async function deleteUserData(
 
 export async function registerUser(email: string): Promise<{ ok: boolean; error?: string }> {
   return sendOTP(email);
+}
+
+// ==================== AI ADVISOR (v3.2) ====================
+// Conforme documento KazolaGlow_Sumario_Executivo_AI_Advisor_v3.docx
+// Secção 8 — apiClient.ts EXPANSÃO OBRIGATÓRIA
+
+/**
+ * F1 — Quanto gastei este mês?
+ * Soma BET_EXPENSE do mês corrente no FINANCIAL_LEDGER
+ */
+export async function getMonthlySpent(userId: string): Promise<{
+  ok: boolean;
+  totalSpent?: number;
+  totalRecovered?: number;
+  error?: string;
+}> {
+  try {
+    return await gasRequest({ action: 'getMonthlySpent', userId });
+  } catch {
+    return { ok: false, error: 'Erro de conexão com o servidor' };
+  }
+}
+
+/**
+ * F2 — Qual o meu ROI?
+ * Calcula (total_recovered - total_spent) / total_spent
+ */
+export async function getROI(userId: string): Promise<{
+  ok: boolean;
+  roi?: number;
+  totalSpent?: number;
+  totalRecovered?: number;
+  error?: string;
+}> {
+  try {
+    return await gasRequest({ action: 'getROI', userId });
+  } catch {
+    return { ok: false, error: 'Erro de conexão com o servidor' };
+  }
+}
+
+/**
+ * H1 — Onde perco mais dinheiro?
+ * Identifica modalidade e sessão com maior BET_EXPENSE
+ */
+export async function getTopLosses(userId: string): Promise<{
+  ok: boolean;
+  losses?: { modalidade: string; session: string; amount: number }[];
+  error?: string;
+}> {
+  try {
+    return await gasRequest({ action: 'getTopLosses', userId });
+  } catch {
+    return { ok: false, error: 'Erro de conexão com o servidor' };
+  }
+}
+
+/**
+ * H2 — Maiores atrasos históricos
+ * Busca gaps dos números no histórico de sorteios
+ */
+export async function getHistoricalGaps(): Promise<{
+  ok: boolean;
+  gaps?: { number: number; days: number }[];
+  error?: string;
+}> {
+  try {
+    return await gasRequest({ action: 'getHistoricalGaps' });
+  } catch {
+    return { ok: false, error: 'Erro de conexão com o servidor' };
+  }
+}
+
+/**
+ * H3 — Analisa últimos sorteios / Timeline
+ * Le os últimos N snapshots do DAILY_SNAPSHOTS
+ */
+export async function getTimeline(userId: string, days: number = 30): Promise<{
+  ok: boolean;
+  data?: { date: string; total_spent: number; total_recovered: number; roi: number; kazola_score: number; streak_days: number; status: string }[];
+  error?: string;
+}> {
+  try {
+    return await gasRequest({ action: 'getTimeline', userId, days: String(days) });
+  } catch {
+    return { ok: false, error: 'Erro de conexão com o servidor' };
+  }
+}
+
+/**
+ * B1 — Score Kazola
+ * Le o score mais recente do KAZOLA_SCORE_HISTORY
+ */
+export async function getKazolaScore(userId: string): Promise<{
+  ok: boolean;
+  score?: number;
+  status?: string;
+  date?: string;
+  error?: string;
+}> {
+  try {
+    return await gasRequest({ action: 'getKazolaScore', userId });
+  } catch {
+    return { ok: false, error: 'Erro de conexão com o servidor' };
+  }
+}
+
+/**
+ * B2 — Onde estou a cometer erros?
+ * Devolve os últimos 3 AI_INSIGHTS não lidos do utilizador
+ */
+export async function getBehaviorInsights(userId: string): Promise<{
+  ok: boolean;
+  insights?: { type: string; message: string; score?: number }[];
+  error?: string;
+}> {
+  try {
+    return await gasRequest({ action: 'getBehaviorInsights', userId });
+  } catch {
+    return { ok: false, error: 'Erro de conexão com o servidor' };
+  }
+}
+
+/**
+ * S1 — Quanto teria poupado se seguisse o plano?
+ * S2 — Simula os últimos 90 dias
+ * Analisa BET_EVENTS e FINANCIAL_LEDGER do período
+ */
+export async function simulatePeriod(userId: string, days: number = 90): Promise<{
+  ok: boolean;
+  totalSpent?: number;
+  totalRecovered?: number;
+  savings?: number;
+  planAdherence?: number;
+  actualSpent?: number;
+  plannedSpent?: number;
+  error?: string;
+}> {
+  try {
+    return await gasRequest({ action: 'simulatePeriod', userId, days: String(days) });
+  } catch {
+    return { ok: false, error: 'Erro de conexão com o servidor' };
+  }
+}
+
+/**
+ * C1 — Cria um plano personalizado
+ * Cria evento PLAN_CREATED em BET_EVENTS e devolve plano estruturado
+ */
+export async function createPlan(userId: string, budget: number): Promise<{
+  ok: boolean;
+  plan?: { day: number; bets: number; amount: number }[];
+  weeklyBudget?: number;
+  dailyBudget?: number;
+  totalBets?: number;
+  error?: string;
+}> {
+  try {
+    return await gasRequest({ action: 'createPlan', userId, budget: String(budget) });
+  } catch {
+    return { ok: false, error: 'Erro de conexão com o servidor' };
+  }
+}
+
+/**
+ * Log de queries do AI Advisor
+ * Regista query em AI_QUERY_LOGS com timestamp e categoria
+ */
+export async function logAIQuery(
+  email: string,
+  question: string,
+  intent: string,
+  responseCategory: 'FREE' | 'PREMIUM' | 'UPSELL' | 'SUPPORT',
+  topic: string
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    return await gasRequest({
+      action: 'logAIQuery',
+      email,
+      question,
+      intent,
+      responseCategory,
+      topic
+    });
+  } catch {
+    return { ok: false, error: 'Erro de conexão com o servidor' };
+  }
 }

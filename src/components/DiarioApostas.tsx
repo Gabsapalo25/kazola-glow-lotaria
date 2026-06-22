@@ -56,7 +56,6 @@ const getStorageKey = (email: string) => `kazola_diario_${email}`;
 const fmtKz = (value: number) =>
   value.toLocaleString('pt-AO', { style: 'currency', currency: 'AOA' });
 
-// Estilo fixo para todas as <option> — resolve o bug de texto invisível
 const optionStyle: React.CSSProperties = {
   background: '#1a1a2e',
   color: '#E5E7EB',
@@ -80,10 +79,118 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate,
   const [error, setError] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [conferindoAuto, setConferindoAuto] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [editandoId, setEditandoId] = useState<string | null>(null);
 
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
-  // ── Sincronização com servidor ──────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────
+  // HELPERS DE CÁLCULO
+  // ─────────────────────────────────────────────────────────────
+  const generateId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+  const calcularPremio = (modalidade: string, acertos: number, valorApostado: number): number => {
+    if (acertos === 0) return 0;
+    const multipliers = MULTIPLIERS[modalidade];
+    if (!multipliers) return 0;
+    const m = multipliers[acertos];
+    if (!m) return 0;
+    return valorApostado * m;
+  };
+
+  const formatarPremio = (valor: number): string => {
+    if (valor <= 0) return '—';
+    return fmtKz(valor);
+  };
+
+  // ─────────────────────────────────────────────────────────────
+  // PONTE PARA O ADVISOR
+  // ─────────────────────────────────────────────────────────────
+  const registrarNoAdvisor = async (registo: RegistoAposta) => {
+    try {
+      const userId = session.userId || session.email;
+      
+      const entryId = `LED_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
+      const ledgerEntry = {
+        entry_id: entryId,
+        user_id: userId,
+        date: registo.data,
+        type: 'BET_EXPENSE',
+        amount_kz: -registo.valorApostado,
+        description: `${registo.modalidade} - ${registo.sessao}`,
+        reference_id: registo.id,
+        created_at: new Date().toISOString()
+      };
+      await saveUserData(session.email, 'financial_ledger', entryId, JSON.stringify(ledgerEntry));
+      
+      const eventId = `EVT_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
+      const betEvent = {
+        event_id: eventId,
+        user_id: userId,
+        timestamp: `${registo.data}T${registo.hora}:00`,
+        event_type: 'BET_CREATED',
+        event_value: JSON.stringify(registo.combinacao),
+        lottery_session: registo.sessao,
+        modalidade: registo.modalidade,
+        amount_kz: registo.valorApostado,
+        source: 'MANUAL',
+        metadata_json: JSON.stringify({ 
+          notas: registo.notas, 
+          resultado: registo.resultado,
+          acertos: registo.acertos,
+          premioRecebido: registo.premioRecebido
+        }),
+        event_version: 1,
+        created_at: new Date().toISOString()
+      };
+      await saveUserData(session.email, 'bet_events', eventId, JSON.stringify(betEvent));
+      
+      console.log('✅ Aposta registada no Advisor:', registo.id);
+    } catch (error) {
+      console.error('❌ Erro ao registar aposta no Advisor:', error);
+    }
+  };
+
+  // ─────────────────────────────────────────────────────────────
+  // ATUALIZAR LEDGER
+  // ─────────────────────────────────────────────────────────────
+  const atualizarLedger = async (registo: RegistoAposta) => {
+    try {
+      const userId = session.userId || session.email;
+      
+      const entryId = `LED_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
+      const ledgerEntry = {
+        entry_id: entryId,
+        user_id: userId,
+        date: registo.data,
+        type: 'BET_EXPENSE',
+        amount_kz: -registo.valorApostado,
+        description: `${registo.modalidade} - ${registo.sessao}`,
+        reference_id: registo.id,
+        created_at: new Date().toISOString()
+      };
+      await saveUserData(session.email, 'financial_ledger', entryId, JSON.stringify(ledgerEntry));
+      
+      if (registo.premioRecebido > 0) {
+        const winId = `WIN_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
+        const winEntry = {
+          entry_id: winId,
+          user_id: userId,
+          date: registo.data,
+          type: 'WINNING',
+          amount_kz: registo.premioRecebido,
+          description: `${registo.modalidade} - ${registo.sessao} - ${registo.acertos} acertos`,
+          reference_id: registo.id,
+          created_at: new Date().toISOString()
+        };
+        await saveUserData(session.email, 'financial_ledger', winId, JSON.stringify(winEntry));
+      }
+    } catch (error) {
+      console.error('❌ Erro ao atualizar LEDGER:', error);
+    }
+  };
+
+  // ── Sincronização com servidor ────────────────────────────
   const loadFromServer = async () => {
     if (!shouldSync(session)) return;
     setSyncing(true);
@@ -91,31 +198,35 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate,
     try {
       const result = await loadUserData(session.email, 'diario');
       if (result.ok && result.records) {
-        const serverRegistos: RegistoAposta[] = [];
-        for (const record of result.records) {
+        const allRecord = result.records.find(r => r.record_id === 'all_registos');
+        if (allRecord) {
           try {
-            const parsed = JSON.parse(record.data);
-            if (parsed.id && parsed.combinacao) serverRegistos.push(parsed as RegistoAposta);
+            const serverRegistos = JSON.parse(allRecord.data);
+            if (Array.isArray(serverRegistos) && serverRegistos.length > 0) {
+              const localKey = getStorageKey(session.email);
+              const localStored = localStorage.getItem(localKey);
+              let localRegistos: RegistoAposta[] = [];
+              if (localStored) {
+                try { localRegistos = JSON.parse(localStored); } catch { /* ignore */ }
+              }
+              const mergedMap = new Map<string, RegistoAposta>();
+              serverRegistos.forEach(r => mergedMap.set(r.id, r));
+              localRegistos.forEach(r => { if (!mergedMap.has(r.id)) mergedMap.set(r.id, r); });
+              const merged = Array.from(mergedMap.values())
+                .sort((a, b) => b.data.localeCompare(a.data) || b.hora.localeCompare(b.hora));
+              setRegistos(merged);
+              localStorage.setItem(localKey, JSON.stringify(merged));
+              if (onSessionUpdate) onSessionUpdate(updateLastSync(session));
+              setSyncing(false);
+              return;
+            }
           } catch { /* ignore */ }
         }
-
-        const localKey = getStorageKey(session.email);
-        const localStored = localStorage.getItem(localKey);
-        let localRegistos: RegistoAposta[] = [];
-        if (localStored) {
-          try { localRegistos = JSON.parse(localStored); } catch { /* ignore */ }
-        }
-
-        const mergedMap = new Map<string, RegistoAposta>();
-        serverRegistos.forEach(r => mergedMap.set(r.id, r));
-        localRegistos.forEach(r => { if (!mergedMap.has(r.id)) mergedMap.set(r.id, r); });
-
-        const merged = Array.from(mergedMap.values())
-          .sort((a, b) => b.data.localeCompare(a.data) || b.hora.localeCompare(b.hora));
-
-        setRegistos(merged);
-        localStorage.setItem(localKey, JSON.stringify(merged));
-        if (onSessionUpdate) onSessionUpdate(updateLastSync(session));
+      }
+      const key = getStorageKey(session.email);
+      const stored = localStorage.getItem(key);
+      if (stored) {
+        try { setRegistos(JSON.parse(stored)); } catch { /* ignore */ }
       }
     } catch {
       setSyncError('Erro ao sincronizar com o servidor');
@@ -124,32 +235,142 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate,
     }
   };
 
+  // ── Guardar registos ──────────────────────────────────────
   const saveRegistos = async (newRegistos: RegistoAposta[]) => {
+    setIsSaving(true);
+    
     localStorage.setItem(getStorageKey(session.email), JSON.stringify(newRegistos));
     setRegistos(newRegistos);
+    
     if (shouldSync(session)) {
-      for (const registo of newRegistos) {
-        try {
-          await saveUserData(session.email, 'diario', registo.id, JSON.stringify(registo));
-        } catch {
-          setSyncError('Erro ao sincronizar. Os dados estão guardados localmente.');
-        }
+      try {
+        setTimeout(async () => {
+          try {
+            await saveUserData(session.email, 'diario', 'all_registos', JSON.stringify(newRegistos));
+            
+            const novosRegistos = newRegistos.filter(r => 
+              !registos.some(old => old.id === r.id)
+            );
+            for (const registo of novosRegistos) {
+              await registrarNoAdvisor(registo);
+            }
+            
+            if (onSessionUpdate) onSessionUpdate(updateLastSync(session));
+          } catch {
+            setSyncError('Erro ao sincronizar. Os dados estão guardados localmente.');
+          }
+        }, 100);
+      } catch {
+        setSyncError('Erro ao sincronizar. Os dados estão guardados localmente.');
       }
-      if (onSessionUpdate) onSessionUpdate(updateLastSync(session));
     }
+    
+    setIsSaving(false);
   };
 
+  // ── Eliminar registo ──────────────────────────────────────
   const deleteRegisto = async (id: string) => {
     const filtered = registos.filter(r => r.id !== id);
     localStorage.setItem(getStorageKey(session.email), JSON.stringify(filtered));
     setRegistos(filtered);
     if (shouldSync(session)) {
       try {
-        await deleteUserData(session.email, id, 'diario');
+        await saveUserData(session.email, 'diario', 'all_registos', JSON.stringify(filtered));
       } catch {
         setSyncError('Erro ao eliminar do servidor. O registo foi removido localmente.');
       }
     }
+  };
+
+  // ── EDITAR REGISTO ────────────────────────────────────────
+  const iniciarEdicao = (registo: RegistoAposta) => {
+    setEditandoId(registo.id);
+    setFormData({
+      data: registo.data,
+      hora: registo.hora,
+      combinacao: [...registo.combinacao.map(String), '', '', '', ''].slice(0, 5),
+      valorApostado: registo.valorApostado,
+      sessao: registo.sessao,
+      modalidade: registo.modalidade,
+      notas: registo.notas || '',
+    });
+  };
+
+  const cancelarEdicao = () => {
+    setEditandoId(null);
+    setFormData({
+      data: new Date().toISOString().split('T')[0],
+      hora: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
+      combinacao: ['', '', '', '', ''],
+      valorApostado: 100,
+      sessao: 'Fezada',
+      modalidade: 'chance5',
+      notas: '',
+    });
+  };
+
+  const handleEditar = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSaving) return;
+    if (!editandoId) return;
+    
+    setError(null);
+    setSyncError(null);
+
+    const numerosNecessarios = NUMBERS_PER_CHANCE[formData.modalidade];
+    const numeros = formData.combinacao.slice(0, numerosNecessarios).map(n => parseInt(n));
+
+    if (!formData.combinacao.slice(0, numerosNecessarios).every(n => n !== ''))
+      return setError(`Preencha os ${numerosNecessarios} números da combinação`);
+    if (numeros.some(isNaN))
+      return setError('Preencha todos os números da combinação');
+    if (numeros.some(n => n < 1 || n > 90))
+      return setError('Os números devem estar entre 1 e 90');
+    if (new Set(numeros).size !== numerosNecessarios)
+      return setError('Os números não podem repetir-se');
+    if (formData.valorApostado < 50 || formData.valorApostado > 1000)
+      return setError('O valor apostado deve estar entre 50 e 1000 Kz');
+
+    const registoExistente = registos.find(r => r.id === editandoId);
+    if (!registoExistente) return;
+
+    let acertos = registoExistente.acertos ?? 0;
+    let premioRecebido = registoExistente.premioRecebido ?? 0;
+
+    if (registoExistente.resultado === 'verificado') {
+      const sorteio = draws.find(d => {
+        const mesmaData = d.date === formData.data;
+        const s1 = formData.sessao.toLowerCase();
+        const s2 = d.session?.toLowerCase() || '';
+        return mesmaData && s1 === s2;
+      });
+
+      if (sorteio) {
+        acertos = numeros.filter(n => sorteio.numbers.includes(n)).length;
+        premioRecebido = calcularPremio(formData.modalidade, acertos, formData.valorApostado);
+        if (premioRecebido < 0) premioRecebido = 0;
+      }
+    }
+
+    const registoEditado: RegistoAposta = {
+      ...registoExistente,
+      data: formData.data,
+      hora: formData.hora,
+      combinacao: numeros,
+      valorApostado: formData.valorApostado,
+      sessao: formData.sessao,
+      modalidade: formData.modalidade,
+      notas: formData.notas,
+      acertos: acertos,
+      premioRecebido: premioRecebido,
+    };
+
+    await atualizarLedger(registoEditado);
+
+    const updated = registos.map(r => r.id === editandoId ? registoEditado : r);
+    await saveRegistos(updated);
+    setEditandoId(null);
+    cancelarEdicao();
   };
 
   useEffect(() => {
@@ -174,15 +395,6 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate,
     return () => window.removeEventListener('apostas-atualizadas', handleApostasAtualizadas as EventListener);
   }, [session.email]);
 
-  const generateId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
-  const calcularPremio = (modalidade: string, acertos: number, valorApostado: number): number => {
-    const multipliers = MULTIPLIERS[modalidade];
-    if (!multipliers || acertos === 0) return 0;
-    const m = multipliers[acertos];
-    return m ? valorApostado * m : 0;
-  };
-
   const handleNumberInput = (index: number, value: string) => {
     const only = value.replace(/[^0-9]/g, '');
     const newCombinacao = [...formData.combinacao];
@@ -198,6 +410,8 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate,
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
+    
     setError(null);
     setSyncError(null);
 
@@ -229,7 +443,24 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate,
       notas: formData.notas,
     };
 
-    await saveRegistos([novoRegisto, ...registos]);
+    const novosRegistos = [novoRegisto, ...registos];
+    localStorage.setItem(getStorageKey(session.email), JSON.stringify(novosRegistos));
+    setRegistos(novosRegistos);
+
+    if (shouldSync(session)) {
+      try {
+        saveUserData(session.email, 'diario', 'all_registos', JSON.stringify(novosRegistos))
+          .then(async () => {
+            await registrarNoAdvisor(novoRegisto);
+            if (onSessionUpdate) onSessionUpdate(updateLastSync(session));
+          })
+          .catch(() => {
+            setSyncError('Erro ao sincronizar. Os dados estão guardados localmente.');
+          });
+      } catch {
+        setSyncError('Erro ao sincronizar. Os dados estão guardados localmente.');
+      }
+    }
 
     setFormData({
       data: new Date().toISOString().split('T')[0],
@@ -254,10 +485,23 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate,
 
   const confirmarVerificacao = async () => {
     if (!verificandoId) return;
+    
+    const registo = registos.find(r => r.id === verificandoId);
+    if (!registo) return;
+
+    const premioFinal = premioTemp > 0 ? premioTemp : 0;
+
+    const updatedRegisto: RegistoAposta = {
+      ...registo,
+      resultado: 'verificado' as const,
+      acertos: acertosTemp,
+      premioRecebido: premioFinal,
+    };
+
+    await atualizarLedger(updatedRegisto);
+
     const updated = registos.map(r =>
-      r.id === verificandoId
-        ? { ...r, resultado: 'verificado' as const, acertos: acertosTemp, premioRecebido: premioTemp }
-        : r
+      r.id === verificandoId ? updatedRegisto : r
     );
     await saveRegistos(updated);
     setVerificandoId(null);
@@ -270,18 +514,29 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate,
       alert('⚠️ Sem dados de sorteios para conferir. Aguarde a actualização da API.');
       return;
     }
+
+    console.log('🔍 A conferir aposta:', registo);
+    console.log('📊 Sorteios disponíveis:', draws);
+
     setConferindoAuto(registo.id);
     try {
-      const sorteio = draws.find(d => {
+      let sorteio = draws.find(d => {
         const mesmaData = d.date === registo.data;
         const s1 = registo.sessao.toLowerCase();
         const s2 = d.session?.toLowerCase() || '';
-        const mesmaSessao = s1 === s2;
-        return mesmaData && mesmaSessao;
+        return mesmaData && s1 === s2;
       });
 
       if (!sorteio) {
-        alert(`⚠️ Nenhum sorteio encontrado para ${registo.data} (${registo.sessao}).`);
+        console.warn('⚠️ Nenhum sorteio encontrado com sessão, tentando apenas por data...');
+        sorteio = draws.find(d => d.date === registo.data);
+        if (sorteio) {
+          alert(`ℹ️ Encontrado sorteio para ${registo.data} (sessão: ${sorteio.session || 'desconhecida'}).\nA conferir com esta sessão.`);
+        }
+      }
+
+      if (!sorteio) {
+        alert(`⚠️ Nenhum sorteio encontrado para ${registo.data} (${registo.sessao}).\n\nVerifique se a data e sessão estão corretas.`);
         return;
       }
 
@@ -289,17 +544,21 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate,
       const premio = calcularPremio(registo.modalidade, acertos, registo.valorApostado);
       const multipliers = MULTIPLIERS[registo.modalidade];
       const mult = multipliers[acertos] || 0;
+      const premioDisplay = premio > 0 ? fmtKz(premio) : '—';
+
       const numerosApostados = registo.combinacao.join(', ');
       const numerosSorteados = sorteio.numbers.join(', ');
       const numerosAcertados = registo.combinacao.filter(n => sorteio.numbers.includes(n)).join(', ');
 
       let mensagem = '';
       if (acertos === 5) {
-        mensagem = `🎉🎉🎉 JACKPOT! 🎉🎉🎉\n\n5 ACERTOS! PRÉMIO MÁXIMO!\n\n🎯 Apostados: ${numerosApostados}\n🎲 Sorteados: ${numerosSorteados}\n✅ Acertos: 5 ×${mult}\n💰 PRÉMIO: ${fmtKz(premio)}`;
+        mensagem = `🎉🎉🎉 JACKPOT! 🎉🎉🎉\n\n5 ACERTOS! PRÉMIO MÁXIMO!\n\n🎯 Apostados: ${numerosApostados}\n🎲 Sorteados: ${numerosSorteados}\n✅ Acertos: 5 ×${mult}\n💰 PRÉMIO: ${premioDisplay}`;
       } else if (acertos === 4) {
-        mensagem = `🎉 QUASE JACKPOT!\n\n4 ACERTOS!\n\n🎯 Apostados: ${numerosApostados}\n🎲 Sorteados: ${numerosSorteados}\n✅ Acertos: 4 ×${mult}\n💰 PRÉMIO: ${fmtKz(premio)}`;
+        mensagem = `🎉 QUASE JACKPOT!\n\n4 ACERTOS!\n\n🎯 Apostados: ${numerosApostados}\n🎲 Sorteados: ${numerosSorteados}\n✅ Acertos: 4 ×${mult}\n💰 PRÉMIO: ${premioDisplay}`;
       } else if (acertos >= 2) {
-        mensagem = `🎉 ${acertos} acertos!\n\n🎯 Apostados: ${numerosApostados}\n🎲 Sorteados: ${numerosSorteados}\n✅ Acertos: ${acertos} ×${mult}${numerosAcertados ? `\n   Acertou: ${numerosAcertados}` : ''}\n💰 PRÉMIO: ${fmtKz(premio)}`;
+        mensagem = `🎉 ${acertos} acertos!\n\n🎯 Apostados: ${numerosApostados}\n🎲 Sorteados: ${numerosSorteados}\n✅ Acertos: ${acertos} ×${mult}${numerosAcertados ? `\n   Acertou: ${numerosAcertados}` : ''}\n💰 PRÉMIO: ${premioDisplay}`;
+      } else if (acertos === 1) {
+        mensagem = `📊 Resultado:\n\n🎯 Apostados: ${numerosApostados}\n🎲 Sorteados: ${numerosSorteados}\n✅ Acertos: ${acertos}\n💰 PRÉMIO: ${premioDisplay} (não cobre a aposta)`;
       } else {
         mensagem = `📊 Resultado:\n\n🎯 Apostados: ${numerosApostados}\n🎲 Sorteados: ${numerosSorteados}\n✅ Acertos: ${acertos}\n💡 Boa sorte na próxima!`;
       }
@@ -307,10 +566,20 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate,
       const confirmar = window.confirm(`${mensagem}\n\nDeseja registar este resultado?`);
       if (confirmar) {
         savePerformanceDetalhada(registo.modalidade, acertos, 1, sorteio.numbers, registo.valorApostado);
+
+        const premioFinal = premio > 0 ? premio : 0;
+
+        const updatedRegisto: RegistoAposta = {
+          ...registo,
+          resultado: 'verificado' as const,
+          acertos: acertos,
+          premioRecebido: premioFinal,
+        };
+
+        await atualizarLedger(updatedRegisto);
+
         const updated = registos.map(r =>
-          r.id === registo.id
-            ? { ...r, resultado: 'verificado' as const, acertos, premioRecebido: premio }
-            : r
+          r.id === registo.id ? updatedRegisto : r
         );
         await saveRegistos(updated);
 
@@ -324,17 +593,18 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate,
           lines: 1,
           drawnNumbers: sorteio.numbers,
           stakePerLine: registo.valorApostado,
-          winAmount: premio,
+          winAmount: premioFinal,
         });
         localStorage.setItem(perfKey, JSON.stringify(perfHistory.slice(0, 200)));
-        window.dispatchEvent(new CustomEvent('performance-atualizada', { detail: { email: session.email, hits: acertos, winAmount: premio } }));
+        window.dispatchEvent(new CustomEvent('performance-atualizada', { detail: { email: session.email, hits: acertos, winAmount: premioFinal } }));
 
-        if (acertos === 5)      alert(`🏆🏆🏆 JACKPOT!\n5 ACERTOS!\nPRÉMIO: ${fmtKz(premio)}`);
-        else if (acertos === 4) alert(`🎉🎉 QUASE JACKPOT!\n4 ACERTOS!\nPRÉMIO: ${fmtKz(premio)}`);
-        else if (acertos >= 2)  alert(`✅ ${acertos} acerto${acertos !== 1 ? 's' : ''} — Prémio: ${fmtKz(premio)}`);
+        if (acertos === 5)      alert(`🏆🏆🏆 JACKPOT!\n5 ACERTOS!\nPRÉMIO: ${fmtKz(premioFinal)}`);
+        else if (acertos === 4) alert(`🎉🎉 QUASE JACKPOT!\n4 ACERTOS!\nPRÉMIO: ${fmtKz(premioFinal)}`);
+        else if (acertos >= 2)  alert(`✅ ${acertos} acerto${acertos !== 1 ? 's' : ''} — Prémio: ${fmtKz(premioFinal)}`);
         else                    alert(`✅ Aposta registada com ${acertos} acerto${acertos !== 1 ? 's' : ''}!`);
       }
-    } catch {
+    } catch (error) {
+      console.error('❌ Erro na conferência:', error);
       alert('❌ Erro ao conferir automaticamente. Tente a verificação manual.');
     } finally {
       setConferindoAuto(null);
@@ -448,6 +718,22 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate,
     whiteSpace: 'nowrap' as const,
   };
 
+  const btnEditarStyle: React.CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+    padding: '6px 10px',
+    borderRadius: '8px',
+    background: 'rgba(245, 197, 24, 0.15)',
+    border: '1px solid rgba(245, 197, 24, 0.4)',
+    color: '#F5C518',
+    fontSize: '11px',
+    fontWeight: 700,
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+    whiteSpace: 'nowrap' as const,
+  };
+
   // ── Render ───────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
@@ -457,6 +743,7 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate,
         input[type=number] { -moz-appearance: textfield; appearance: textfield; }
         .btn-conferir:hover { background: rgba(96,165,250,0.3) !important; border-color: #60A5FA !important; }
         .btn-apagar:hover   { background: rgba(255,75,75,0.25) !important; border-color: #FF4B4B !important; }
+        .btn-editar:hover   { background: rgba(245,197,24,0.3) !important; border-color: #F5C518 !important; }
         .kazola-select option { background: #1a1a2e !important; color: #E5E7EB !important; }
       `}</style>
 
@@ -476,6 +763,11 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate,
           ☁️ Dados sincronizados na nuvem — disponíveis em todos os dispositivos
         </div>
       )}
+      {isSaving && (
+        <div style={{ background: 'rgba(0,245,160,0.1)', border: '1px solid rgba(0,245,160,0.2)', borderRadius: '12px', padding: '8px', textAlign: 'center', color: '#00F5A0', fontSize: '12px' }}>
+          💾 A guardar...
+        </div>
+      )}
 
       {/* Resumo do mês */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -492,139 +784,323 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate,
         ))}
       </div>
 
-      {/* Formulário nova aposta */}
-      <div style={glassCardStyle}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-          <span style={{ fontSize: '20px' }}>📝</span>
-          <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700 }}>Nova Aposta</h3>
-        </div>
-
-        {error && (
-          <div style={{ background: 'rgba(255,75,75,0.1)', border: '1px solid rgba(255,75,75,0.2)', borderRadius: '12px', padding: '12px', marginBottom: '16px', color: '#FF4B4B', fontSize: '14px' }}>
-            ⚠️ {error}
+      {/* ── FORMULÁRIO DE EDIÇÃO ── */}
+      {editandoId && (
+        <div style={glassCardStyle}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+            <span style={{ fontSize: '20px' }}>✏️</span>
+            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700 }}>Editar Aposta</h3>
+            <button
+              onClick={cancelarEdicao}
+              style={{ marginLeft: 'auto', background: 'none', border: 'none', color: '#FF4B4B', fontSize: '20px', cursor: 'pointer' }}
+            >
+              ✕
+            </button>
           </div>
-        )}
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div>
-              <label style={{ fontSize: '11px', fontWeight: 700, marginBottom: '2px', display: 'block', color: '#9CA3AF' }}>Data</label>
-              <input
-                type="date"
-                value={formData.data}
-                onChange={e => setFormData({ ...formData, data: e.target.value })}
-                style={inputStyle}
-                required
-              />
+          {error && (
+            <div style={{ background: 'rgba(255,75,75,0.1)', border: '1px solid rgba(255,75,75,0.2)', borderRadius: '12px', padding: '12px', marginBottom: '16px', color: '#FF4B4B', fontSize: '14px' }}>
+              ⚠️ {error}
             </div>
-            <div>
-              <label style={{ fontSize: '11px', fontWeight: 700, marginBottom: '2px', display: 'block', color: '#9CA3AF' }}>Hora</label>
-              <input
-                type="time"
-                value={formData.hora}
-                onChange={e => setFormData({ ...formData, hora: e.target.value })}
-                style={inputStyle}
-                required
-              />
+          )}
+
+          <form onSubmit={handleEditar} className="space-y-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div>
+                <label style={{ fontSize: '11px', fontWeight: 700, marginBottom: '2px', display: 'block', color: '#9CA3AF' }}>Data</label>
+                <input
+                  type="date"
+                  value={formData.data}
+                  onChange={e => setFormData({ ...formData, data: e.target.value })}
+                  style={inputStyle}
+                  required
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: '11px', fontWeight: 700, marginBottom: '2px', display: 'block', color: '#9CA3AF' }}>Hora</label>
+                <input
+                  type="time"
+                  value={formData.hora}
+                  onChange={e => setFormData({ ...formData, hora: e.target.value })}
+                  style={inputStyle}
+                  required
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: '11px', fontWeight: 700, marginBottom: '2px', display: 'block', color: '#9CA3AF' }}>Valor (Kz)</label>
+                <input
+                  type="number"
+                  min="50"
+                  max="1000"
+                  step="50"
+                  value={formData.valorApostado}
+                  onChange={e => setFormData({ ...formData, valorApostado: parseInt(e.target.value) || 0 })}
+                  style={inputStyle}
+                  required
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: '11px', fontWeight: 700, marginBottom: '2px', display: 'block', color: '#9CA3AF' }}>Sessão</label>
+                <select
+                  className="kazola-select"
+                  value={formData.sessao}
+                  onChange={e => setFormData({ ...formData, sessao: e.target.value as any })}
+                  style={inputStyle}
+                >
+                  {sessoesOrdenadas.map(s => (
+                    <option key={s} value={s} style={optionStyle}>
+                      {sessaoConfig[s].icon} {s} ({sessaoConfig[s].horario})
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
+
             <div>
-              <label style={{ fontSize: '11px', fontWeight: 700, marginBottom: '2px', display: 'block', color: '#9CA3AF' }}>Valor (Kz)</label>
-              <input
-                type="number"
-                min="50"
-                max="1000"
-                step="50"
-                value={formData.valorApostado}
-                onChange={e => setFormData({ ...formData, valorApostado: parseInt(e.target.value) || 0 })}
-                style={inputStyle}
-                required
-              />
-            </div>
-            <div>
-              <label style={{ fontSize: '11px', fontWeight: 700, marginBottom: '2px', display: 'block', color: '#9CA3AF' }}>Sessão</label>
-              {/* ── SELECT SESSÃO — className kazola-select resolve o bug das options ── */}
+              <label style={{ fontSize: '11px', fontWeight: 700, marginBottom: '2px', display: 'block', color: '#9CA3AF' }}>Modalidade</label>
               <select
                 className="kazola-select"
-                value={formData.sessao}
-                onChange={e => setFormData({ ...formData, sessao: e.target.value as any })}
-                style={inputStyle}
+                value={formData.modalidade}
+                onChange={e => {
+                  setFormData({ ...formData, modalidade: e.target.value as any, combinacao: ['', '', '', '', ''] });
+                }}
+                style={{ ...inputStyle, width: '100%' }}
               >
-                {sessoesOrdenadas.map(s => (
-                  <option key={s} value={s} style={optionStyle}>
-                    {sessaoConfig[s].icon} {s} ({sessaoConfig[s].horario})
+                {modalidades.map(m => (
+                  <option key={m.value} value={m.value} style={optionStyle}>
+                    🎯 {m.label} ({m.numeros} números, máx {m.premioMax})
                   </option>
                 ))}
               </select>
             </div>
+
+            <div>
+              <label style={{ fontSize: '11px', fontWeight: 700, marginBottom: '6px', display: 'block', color: '#9CA3AF' }}>
+                🎯 {camposVisiveis} números de 1 a 90
+              </label>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                {Array.from({ length: camposVisiveis }).map((_, idx) => (
+                  <input
+                    key={idx}
+                    ref={el => inputRefs.current[idx] = el}
+                    type="number"
+                    min="1"
+                    max="90"
+                    placeholder="00"
+                    value={formData.combinacao[idx] || ''}
+                    onChange={e => handleNumberInput(idx, e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && idx + 1 < camposVisiveis) {
+                        e.preventDefault();
+                        inputRefs.current[idx + 1]?.focus();
+                      }
+                    }}
+                    style={numberInputStyle}
+                    required
+                  />
+                ))}
+              </div>
+              <div style={{ fontSize: '10px', color: '#6B7280', marginTop: '8px' }}>
+                💡 Digite 2 números por campo (ex: 33) e avança automaticamente
+              </div>
+            </div>
+
+            <div>
+              <label style={{ fontSize: '11px', fontWeight: 700, marginBottom: '2px', display: 'block', color: '#9CA3AF' }}>Notas (opcional)</label>
+              <textarea
+                value={formData.notas}
+                onChange={e => setFormData({ ...formData, notas: e.target.value })}
+                style={{ ...inputStyle, width: '100%', minHeight: '50px' }}
+                rows={2}
+                placeholder="Observações sobre esta aposta..."
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="submit"
+                disabled={isSaving}
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  background: isSaving ? 'rgba(245,197,24,0.4)' : 'linear-gradient(135deg, #F5C518, #D4A017)',
+                  color: '#0B0F19',
+                  fontWeight: 800,
+                  fontSize: '16px',
+                  borderRadius: '14px',
+                  border: 'none',
+                  cursor: isSaving ? 'not-allowed' : 'pointer',
+                  opacity: isSaving ? 0.6 : 1
+                }}
+              >
+                {isSaving ? '⏳ A guardar...' : '💾 ATUALIZAR APOSTA'}
+              </button>
+              <button
+                type="button"
+                onClick={cancelarEdicao}
+                style={{
+                  padding: '12px 24px',
+                  background: 'rgba(255,255,255,0.1)',
+                  color: '#E5E7EB',
+                  fontWeight: 700,
+                  fontSize: '16px',
+                  borderRadius: '14px',
+                  border: '1px solid rgba(255,255,255,0.2)',
+                  cursor: 'pointer'
+                }}
+              >
+                ❌ Cancelar
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* ── FORMULÁRIO NOVA APOSTA ── */}
+      {!editandoId && (
+        <div style={glassCardStyle}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+            <span style={{ fontSize: '20px' }}>📝</span>
+            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700 }}>Nova Aposta</h3>
           </div>
 
-          <div>
-            <label style={{ fontSize: '11px', fontWeight: 700, marginBottom: '2px', display: 'block', color: '#9CA3AF' }}>Modalidade</label>
-            {/* ── SELECT MODALIDADE — className kazola-select resolve o bug das options ── */}
-            <select
-              className="kazola-select"
-              value={formData.modalidade}
-              onChange={e => setFormData({ ...formData, modalidade: e.target.value as any, combinacao: ['', '', '', '', ''] })}
-              style={{ ...inputStyle, width: '100%' }}
-            >
-              {modalidades.map(m => (
-                <option key={m.value} value={m.value} style={optionStyle}>
-                  🎯 {m.label} ({m.numeros} números, máx {m.premioMax})
-                </option>
-              ))}
-            </select>
-          </div>
+          {error && (
+            <div style={{ background: 'rgba(255,75,75,0.1)', border: '1px solid rgba(255,75,75,0.2)', borderRadius: '12px', padding: '12px', marginBottom: '16px', color: '#FF4B4B', fontSize: '14px' }}>
+              ⚠️ {error}
+            </div>
+          )}
 
-          <div>
-            <label style={{ fontSize: '11px', fontWeight: 700, marginBottom: '6px', display: 'block', color: '#9CA3AF' }}>
-              🎯 {camposVisiveis} números de 1 a 90
-            </label>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-              {Array.from({ length: camposVisiveis }).map((_, idx) => (
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div>
+                <label style={{ fontSize: '11px', fontWeight: 700, marginBottom: '2px', display: 'block', color: '#9CA3AF' }}>Data</label>
                 <input
-                  key={idx}
-                  ref={el => inputRefs.current[idx] = el}
-                  type="number"
-                  min="1"
-                  max="90"
-                  placeholder="00"
-                  value={formData.combinacao[idx] || ''}
-                  onChange={e => handleNumberInput(idx, e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' && idx + 1 < camposVisiveis) {
-                      e.preventDefault();
-                      inputRefs.current[idx + 1]?.focus();
-                    }
-                  }}
-                  style={numberInputStyle}
+                  type="date"
+                  value={formData.data}
+                  onChange={e => setFormData({ ...formData, data: e.target.value })}
+                  style={inputStyle}
                   required
                 />
-              ))}
+              </div>
+              <div>
+                <label style={{ fontSize: '11px', fontWeight: 700, marginBottom: '2px', display: 'block', color: '#9CA3AF' }}>Hora</label>
+                <input
+                  type="time"
+                  value={formData.hora}
+                  onChange={e => setFormData({ ...formData, hora: e.target.value })}
+                  style={inputStyle}
+                  required
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: '11px', fontWeight: 700, marginBottom: '2px', display: 'block', color: '#9CA3AF' }}>Valor (Kz)</label>
+                <input
+                  type="number"
+                  min="50"
+                  max="1000"
+                  step="50"
+                  value={formData.valorApostado}
+                  onChange={e => setFormData({ ...formData, valorApostado: parseInt(e.target.value) || 0 })}
+                  style={inputStyle}
+                  required
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: '11px', fontWeight: 700, marginBottom: '2px', display: 'block', color: '#9CA3AF' }}>Sessão</label>
+                <select
+                  className="kazola-select"
+                  value={formData.sessao}
+                  onChange={e => setFormData({ ...formData, sessao: e.target.value as any })}
+                  style={inputStyle}
+                >
+                  {sessoesOrdenadas.map(s => (
+                    <option key={s} value={s} style={optionStyle}>
+                      {sessaoConfig[s].icon} {s} ({sessaoConfig[s].horario})
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
-            <div style={{ fontSize: '10px', color: '#6B7280', marginTop: '8px' }}>
-              💡 Digite 2 números por campo (ex: 33) e avança automaticamente
+
+            <div>
+              <label style={{ fontSize: '11px', fontWeight: 700, marginBottom: '2px', display: 'block', color: '#9CA3AF' }}>Modalidade</label>
+              <select
+                className="kazola-select"
+                value={formData.modalidade}
+                onChange={e => setFormData({ ...formData, modalidade: e.target.value as any, combinacao: ['', '', '', '', ''] })}
+                style={{ ...inputStyle, width: '100%' }}
+              >
+                {modalidades.map(m => (
+                  <option key={m.value} value={m.value} style={optionStyle}>
+                    🎯 {m.label} ({m.numeros} números, máx {m.premioMax})
+                  </option>
+                ))}
+              </select>
             </div>
-          </div>
 
-          <div>
-            <label style={{ fontSize: '11px', fontWeight: 700, marginBottom: '2px', display: 'block', color: '#9CA3AF' }}>Notas (opcional)</label>
-            <textarea
-              value={formData.notas}
-              onChange={e => setFormData({ ...formData, notas: e.target.value })}
-              style={{ ...inputStyle, width: '100%', minHeight: '50px' }}
-              rows={2}
-              placeholder="Observações sobre esta aposta..."
-            />
-          </div>
+            <div>
+              <label style={{ fontSize: '11px', fontWeight: 700, marginBottom: '6px', display: 'block', color: '#9CA3AF' }}>
+                🎯 {camposVisiveis} números de 1 a 90
+              </label>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                {Array.from({ length: camposVisiveis }).map((_, idx) => (
+                  <input
+                    key={idx}
+                    ref={el => inputRefs.current[idx] = el}
+                    type="number"
+                    min="1"
+                    max="90"
+                    placeholder="00"
+                    value={formData.combinacao[idx] || ''}
+                    onChange={e => handleNumberInput(idx, e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && idx + 1 < camposVisiveis) {
+                        e.preventDefault();
+                        inputRefs.current[idx + 1]?.focus();
+                      }
+                    }}
+                    style={numberInputStyle}
+                    required
+                  />
+                ))}
+              </div>
+              <div style={{ fontSize: '10px', color: '#6B7280', marginTop: '8px' }}>
+                💡 Digite 2 números por campo (ex: 33) e avança automaticamente
+              </div>
+            </div>
 
-          <button
-            type="submit"
-            style={{ width: '100%', padding: '12px', background: 'linear-gradient(135deg, #00F5A0, #00C896)', color: '#0B0F19', fontWeight: 800, fontSize: '16px', borderRadius: '14px', border: 'none', cursor: 'pointer' }}
-          >
-            REGISTAR APOSTA
-          </button>
-        </form>
-      </div>
+            <div>
+              <label style={{ fontSize: '11px', fontWeight: 700, marginBottom: '2px', display: 'block', color: '#9CA3AF' }}>Notas (opcional)</label>
+              <textarea
+                value={formData.notas}
+                onChange={e => setFormData({ ...formData, notas: e.target.value })}
+                style={{ ...inputStyle, width: '100%', minHeight: '50px' }}
+                rows={2}
+                placeholder="Observações sobre esta aposta..."
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={isSaving}
+              style={{
+                width: '100%',
+                padding: '12px',
+                background: isSaving ? 'rgba(0,245,160,0.4)' : 'linear-gradient(135deg, #00F5A0, #00C896)',
+                color: '#0B0F19',
+                fontWeight: 800,
+                fontSize: '16px',
+                borderRadius: '14px',
+                border: 'none',
+                cursor: isSaving ? 'not-allowed' : 'pointer',
+                opacity: isSaving ? 0.6 : 1
+              }}
+            >
+              {isSaving ? '⏳ A guardar...' : 'REGISTAR APOSTA'}
+            </button>
+          </form>
+        </div>
+      )}
 
       {/* Histórico */}
       <div style={glassCardStyle}>
@@ -699,13 +1175,12 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate,
                         }
                       </td>
                       <td style={{ padding: '10px 12px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'flex-end' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                           {registo.resultado === 'pendente' && (
                             <button
                               className="btn-conferir"
                               onClick={() => conferirAutomaticamente(registo)}
                               disabled={conferindoAuto === registo.id}
-                              title="Conferir resultado com o sorteio"
                               style={{
                                 ...btnConferirStyle,
                                 opacity: conferindoAuto === registo.id ? 0.5 : 1,
@@ -720,7 +1195,14 @@ const DiarioApostas: React.FC<DiarioApostasProps> = ({ session, onSessionUpdate,
                               ✅ Verificado
                             </span>
                           )}
-                          <div style={{ width: '1px', height: '20px', background: 'rgba(255,255,255,0.1)', flexShrink: 0 }} />
+                          <button
+                            className="btn-editar"
+                            onClick={() => iniciarEdicao(registo)}
+                            title="Editar registo"
+                            style={btnEditarStyle}
+                          >
+                            ✏️ Editar
+                          </button>
                           <button
                             className="btn-apagar"
                             onClick={() => handleEliminar(registo.id)}

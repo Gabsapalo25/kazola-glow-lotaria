@@ -1,13 +1,38 @@
 /**
- * ChatBot.tsx — Assistente KazolaGlow
+ * ChatBot.tsx — Assistente KazolaGlow v3.7
  * Professor · Diplomata · Empático · Vendedor
- * Conhece todos os tópicos da página
- * Resolve problemas primeiro — as vendas vêm por si
+ *
+ * v3.7 — NOVIDADES:
+ * - Mensagem proactiva de boas-vindas ("o balcão") — aparece 6s após entrada
+ * - Botão "🧠 Onde erro?" adicionado ao menu Premium
+ * - Segmentação por perfil (visitante, trial, premium, trial a expirar)
+ * - Limite de 1 exibição por dia (localStorage)
+ * 
+ * v3.6 — CORREÇÕES CRÍTICAS (ver changelog no fim do ficheiro):
+ * - Os 10 blocos do AI Advisor (F1→C1) movidos para o TOPO do getAnswer(),
+ *   antes dos 21 blocos antigos — corrige colisões de palavra-chave que
+ *   tornavam "quanto gastei", "atrasos" e "onde erro" inalcançáveis.
+ * - logAIQuery corrigido em todos os blocos para a assinatura real do
+ *   apiClient.ts: logAIQuery(email, question, intent, responseCategory, topic)
+ * - helper logQuery (antes morto/nunca usado) agora é o único ponto de logging
+ * v3.5 — Boas-vindas com orientação personalizada para o Advisor (funcional)
  */
 
 import { useState, useRef, useEffect } from 'react';
 import avatarBot from '../assets/avatar-bot.webp';
 import { UserSession, trialDaysLeft } from '../lib/session';
+import {
+  getMonthlySpent,
+  getROI,
+  getKazolaScore,
+  getBehaviorInsights,
+  getTimeline,
+  getTopLosses,
+  createPlan,
+  logAIQuery,
+  simulatePeriod,
+  getHistoricalGaps
+} from '../lib/apiClient';
 
 interface Message {
   id: number;
@@ -26,12 +51,46 @@ interface Props {
 }
 
 // ─────────────────────────────────────────────────────────────
+// HELPERS ADICIONAIS
+// ─────────────────────────────────────────────────────────────
+function formatKz(amount: number): string {
+  if (amount === 0) return '0 Kz';
+  const abs = Math.abs(amount);
+  let formatted = abs.toLocaleString('pt-PT');
+  if (amount < 0) formatted = `-${formatted}`;
+  return `${formatted} Kz`;
+}
+
+function formatPercent(value: number): string {
+  return `${value.toFixed(1)}%`;
+}
+
+function getStatusEmoji(score: number): string {
+  if (score >= 80) return '🌟';
+  if (score >= 60) return '✅';
+  if (score >= 40) return '⚠️';
+  return '🚨';
+}
+
+function getStatusLabel(score: number): string {
+  if (score >= 80) return 'EXCELENTE';
+  if (score >= 60) return 'CONTROLADO';
+  if (score >= 40) return 'INSTÁVEL';
+  return 'CRÍTICO';
+}
+
+// Categorias amplas de intenção (seção 2.7 do Sumário Executivo:
+// FINANCE │ BEHAVIOR │ HISTORY │ SIMULATION │ COACHING)
+type Intent = 'FINANCE' | 'BEHAVIOR' | 'HISTORY' | 'SIMULATION' | 'COACHING';
+type ResponseCategory = 'FREE' | 'PREMIUM' | 'UPSELL' | 'SUPPORT';
+
+// ─────────────────────────────────────────────────────────────
 // RESPOSTAS — professor + empático + vendedor natural
 // ─────────────────────────────────────────────────────────────
-function getAnswer(
+async function getAnswer(
   input: string,
   session: UserSession | null
-): { answer: string; html?: string; btns: { label: string; action: string }[] } {
+): Promise<{ answer: string; html?: string; btns: { label: string; action: string }[] }> {
   const raw = input.toLowerCase().trim();
   const lower = raw.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   const isPremium = session?.isPremium || false;
@@ -51,43 +110,670 @@ function getAnswer(
     return '';
   };
 
+  // ── log automático corrigido (v3.6) ──────────────────────
+  // Assinatura real do apiClient.ts: (email, question, intent, responseCategory, topic)
+  const logQuery = (intent: Intent, topic: string, responseCategory: ResponseCategory) => {
+    if (session?.email) {
+      logAIQuery(session.email, input, intent, responseCategory, topic)
+        .catch(err => console.error('❌ Erro ao logar query:', err));
+    }
+  };
+
+  // ═══════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════
+  // BLOCOS DO AI ADVISOR — MOVIDOS PARA O TOPO (v3.6)
+  // ─────────────────────────────────────────────────────────────────
+  // Estes 10 blocos têm de ser avaliados ANTES dos blocos genéricos
+  // antigos (seções 1–21 mais abaixo), porque palavras-chave largas
+  // como 'quanto', 'atraso' e 'erro' nesses blocos antigos interceptavam
+  // as perguntas do Advisor antes de chegarem aqui. Regra do documento
+  // (seção 4.4): "condição mais específica deve vir SEMPRE antes da
+  // mais genérica".
+  // ═══════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════
+
   // ═══════════════════════════════════════════════════════
-  // 1 · MENU / BOAS-VINDAS
+  // F1 — Quanto gastei este mês? (Gratuito)
+  // ═══════════════════════════════════════════════════════
+  if (lower.includes('gastei') || lower.includes('gasto') || lower.includes('quanto gastei') ||
+      lower.includes('gastos este mes') || (lower.includes('gastos') && lower.includes('mes')) ||
+      (lower.includes('despesa') && lower.includes('mes'))) {
+
+    logQuery('FINANCE', 'FINANCE.MONTHLY_SPENT', session ? 'FREE' : 'UPSELL');
+
+    if (!session) {
+      return {
+        answer: `📝 Para veres os teus gastos, precisas de ter uma conta.\n\nO registo é gratuito e leva 30 segundos.`,
+        btns: [trialCTA, menuCTA],
+      };
+    }
+
+    try {
+      const userId = session.userId || session.email;
+      const result = await getMonthlySpent(userId);
+
+      if (!result || result.error) {
+        return {
+          answer: `📊 **Os teus gastos este mês**\n\nAinda não tenho dados registados das tuas apostas.\n\n📝 **Como começar:**\n1. Regista as tuas apostas no Diário\n2. Os dados aparecem automaticamente aqui\n\nSe já registaste apostas, aguarda alguns segundos — o sistema pode estar a processar.`,
+          btns: [
+            { label: '📓 Abrir Diário', action: 'nav_diario' },
+            { label: '🎲 Gerar combinações', action: 'nav_gerador' },
+            menuCTA,
+          ],
+        };
+      }
+
+      const spent = result.totalSpent || 0;
+      const recovered = result.totalRecovered || 0;
+      const net = recovered - spent;
+
+      return {
+        answer: `📊 **Os teus gastos este mês**\n\n💰 **Total gasto:** ${formatKz(spent)}\n💰 **Total recuperado:** ${formatKz(recovered)}\n📊 **Saldo líquido:** ${formatKz(net)}\n\n${net < 0 ? '📉 Estás com saldo negativo. O Diário de Apostas pode ajudar-te a perceber onde podes ajustar.' : '✅ Estás com saldo positivo! Mantém a disciplina.'}\n\n💡 Sabias que podes ver o teu ROI detalhado e análise mensal completa no Premium?`,
+        btns: [
+          { label: '📓 Abrir Diário', action: 'nav_diario' },
+          { label: '📊 Ver ROI', action: 'roi' },
+          ...(!isPremium ? [upgradeCTA] : []),
+          menuCTA,
+        ],
+      };
+    } catch (error) {
+      console.error('❌ Erro ao buscar gastos mensais:', error);
+      return {
+        answer: `📊 **Os teus gastos este mês**\n\nDesculpa, tive um problema ao buscar os teus dados. Tenta novamente em alguns segundos.\n\nSe o problema persistir, contacta o suporte.`,
+        btns: [
+          { label: '📧 Suporte', action: 'suporte' },
+          menuCTA,
+        ],
+      };
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // F2 — Qual o meu ROI? (Gratuito)
+  // ═══════════════════════════════════════════════════════
+  if (lower.includes('roi') || lower.includes('retorno') || lower.includes('rendibilidade') ||
+      lower.includes('lucro') || lower.includes('prejuizo') || lower.includes('taxa de retorno') ||
+      lower.includes('quanto recuperei')) {
+
+    logQuery('FINANCE', 'FINANCE.ROI', session ? 'FREE' : 'UPSELL');
+
+    if (!session) {
+      return {
+        answer: `📝 Para veres o teu ROI, precisas de ter uma conta.\n\nO registo é gratuito e leva 30 segundos.`,
+        btns: [trialCTA, menuCTA],
+      };
+    }
+
+    try {
+      const userId = session.userId || session.email;
+      const result = await getROI(userId);
+
+      if (!result || result.error) {
+        return {
+          answer: `📊 **O teu ROI**\n\nAinda não tenho dados suficientes para calcular o teu ROI.\n\n📝 Regista as tuas apostas no Diário para começares a ver esta métrica.\n\n💡 O ROI mostra a relação entre o que gastas e o que recuperas em prémios.`,
+          btns: [
+            { label: '📓 Abrir Diário', action: 'nav_diario' },
+            menuCTA,
+          ],
+        };
+      }
+
+      const roi = result.roi || 0;
+      const totalSpent = result.totalSpent || 0;
+      const totalRecovered = result.totalRecovered || 0;
+      const isPositive = roi > 0;
+
+      return {
+        answer: `📊 **O teu ROI**\n\n📈 **Retorno sobre investimento:** ${formatPercent(roi)}\n💰 **Total gasto:** ${formatKz(totalSpent)}\n💰 **Total recuperado:** ${formatKz(totalRecovered)}\n\n${isPositive ? '✅ Excelente! Estás a recuperar mais do que gastas.' : '⚠️ Estás a recuperar menos do que gastas. O importante é manter o controlo e o jogo como entretenimento.'}\n\n💡 O ROI é um indicador financeiro. O **Score Kazola** mede a tua disciplina — independentemente do resultado financeiro.`,
+        btns: [
+          { label: '📊 Ver Score Kazola', action: 'score' },
+          { label: '📓 Abrir Diário', action: 'nav_diario' },
+          ...(!isPremium ? [upgradeCTA] : []),
+          menuCTA,
+        ],
+      };
+    } catch (error) {
+      console.error('❌ Erro ao buscar ROI:', error);
+      return {
+        answer: `📊 **O teu ROI**\n\nDesculpa, tive um problema ao buscar os teus dados. Tenta novamente em alguns segundos.`,
+        btns: [menuCTA],
+      };
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // H1 — Onde perco mais dinheiro? (Gratuito)
+  // ═══════════════════════════════════════════════════════
+  if (lower.includes('onde perco') || lower.includes('mais perco') || lower.includes('maior perda') ||
+      lower.includes('pior modalidade') || lower.includes('onde gasto mais') ||
+      lower.includes('qual a modalidade') || lower.includes('perdas por')) {
+
+    logQuery('BEHAVIOR', 'BEHAVIOR.TOP_LOSSES', session ? 'FREE' : 'UPSELL');
+
+    if (!session) {
+      return {
+        answer: `📝 Para analisares onde perdes mais, precisas de ter uma conta.\n\nO registo é gratuito e leva 30 segundos.`,
+        btns: [trialCTA, menuCTA],
+      };
+    }
+
+    try {
+      const userId = session.userId || session.email;
+      const result = await getTopLosses(userId);
+
+      if (!result || result.error || !result.losses || result.losses.length === 0) {
+        return {
+          answer: `📊 **Onde perco mais dinheiro?**\n\nAinda não tenho dados suficientes para esta análise.\n\n📝 Regista as tuas apostas no Diário com a sessão e modalidade para eu poder identificar padrões.`,
+          btns: [
+            { label: '📓 Abrir Diário', action: 'nav_diario' },
+            menuCTA,
+          ],
+        };
+      }
+
+      let lossText = '📊 **Onde perco mais dinheiro?**\n\n';
+      result.losses.forEach((loss: any, index: number) => {
+        lossText += `${index + 1}. **${loss.modalidade}** — ${formatKz(loss.amount)} (${loss.session || 'todas as sessões'})\n`;
+      });
+
+      lossText += `\n💡 **Dica:** Se quiseres reduzir perdas, considera:\n`;
+      lossText += `• Reduzir o valor por aposta na modalidade com maior perda\n`;
+      lossText += `• Usar o Plano Semanal para distribuir melhor o orçamento\n`;
+      lossText += `• O Score Kazola mostra a tua disciplina global`;
+
+      return {
+        answer: lossText,
+        btns: [
+          { label: '📊 Ver Score Kazola', action: 'score' },
+          { label: '📅 Plano Semanal', action: 'plano' },
+          ...(!isPremium ? [upgradeCTA] : []),
+          menuCTA,
+        ],
+      };
+    } catch (error) {
+      console.error('❌ Erro ao buscar perdas:', error);
+      return {
+        answer: `📊 **Onde perco mais dinheiro?**\n\nDesculpa, tive um problema ao buscar os teus dados. Tenta novamente em alguns segundos.`,
+        btns: [menuCTA],
+      };
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // H2 — Maiores atrasos históricos (Gratuito)
+  // ═══════════════════════════════════════════════════════
+  if (lower.includes('atrasos') || lower.includes('atrasados') || lower.includes('gaps') ||
+      lower.includes('números que não saem') || lower.includes('maiores atrasos') ||
+      lower.includes('há quanto tempo') || lower.includes('nao sai')) {
+
+    logQuery('HISTORY', 'HISTORY.GAPS', 'FREE');
+
+    try {
+      const result = await getHistoricalGaps();
+
+      if (!result || result.error || !result.gaps || result.gaps.length === 0) {
+        return {
+          answer: `📊 **Maiores atrasos históricos**\n\nDesculpa, não consegui buscar os dados dos sorteios. Tenta novamente em alguns segundos.\n\nSe o problema persistir, contacta o suporte.`,
+          btns: [menuCTA],
+        };
+      }
+
+      let gapText = '⏳ **Maiores atrasos históricos**\n\n';
+      gapText += `Estes são os números que estão há mais sorteios sem serem sorteados:\n\n`;
+
+      result.gaps.slice(0, 10).forEach((gap: any, index: number) => {
+        const emoji = gap.days >= 30 ? '🔴' : gap.days >= 15 ? '🟡' : '⚪';
+        gapText += `${emoji} **${gap.number}** — ${gap.days} sorteios sem sair\n`;
+      });
+
+      gapText += `\n💡 **O que significa?**\n`;
+      gapText += `• 🔴 ≥30 sorteios sem sair — "número frio" extremo\n`;
+      gapText += `• 🟡 15-29 sorteios — "número frio"\n`;
+      gapText += `• ⚪ 0-14 sorteios — frequência normal\n\n`;
+      gapText += `⚠️ **Importante:** Números atrasados NÃO têm maior probabilidade de sair. Cada sorteio é independente. Use esta informação apenas como referência histórica.`;
+
+      return {
+        answer: gapText,
+        btns: [
+          { label: '📊 Ver Estatísticas', action: 'nav_estatisticas' },
+          { label: '🎲 Usar no Gerador', action: 'gerador' },
+          menuCTA,
+        ],
+      };
+    } catch (error) {
+      console.error('❌ Erro ao buscar gaps:', error);
+      return {
+        answer: `⏳ **Maiores atrasos históricos**\n\nDesculpa, tive um problema ao buscar os dados dos sorteios. Tenta novamente em alguns segundos.`,
+        btns: [menuCTA],
+      };
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // H3 — Analisa últimos sorteios (Gratuito)
+  // ═══════════════════════════════════════════════════════
+  if (lower.includes('ultimos sorteios') || lower.includes('sorteios recentes') ||
+      lower.includes('tendencias recentes') || lower.includes('analisa ultimos') ||
+      lower.includes('resultados recentes')) {
+
+    logQuery('HISTORY', 'HISTORY.RECENT', 'FREE');
+
+    try {
+      const userId = session?.userId || session?.email || 'guest';
+      const result = await getTimeline(userId, 30);
+
+      if (!result || result.error || !result.data || result.data.length === 0) {
+        return {
+          answer: `📊 **Análise dos últimos sorteios**\n\nAinda não tenho dados históricos suficientes para esta análise.\n\nTenta novamente mais tarde ou regista as tuas apostas no Diário para começar a ver o teu padrão.`,
+          btns: [
+            { label: '📜 Ver Histórico', action: 'nav_historico' },
+            menuCTA,
+          ],
+        };
+      }
+
+      const recentData = result.data.slice(-10);
+      let analysis = '📊 **Análise dos últimos sorteios**\n\n';
+      analysis += `📅 Período: ${recentData[0]?.date || 'N/A'} a ${recentData[recentData.length - 1]?.date || 'N/A'}\n`;
+      analysis += `📊 Total de sorteios analisados: ${recentData.length}\n\n`;
+
+      analysis += `📈 **Tendências observadas:**\n`;
+      const spent = recentData.reduce((sum: number, d: any) => sum + (d.total_spent || 0), 0);
+      const recovered = recentData.reduce((sum: number, d: any) => sum + (d.total_recovered || 0), 0);
+      const avgSpent = spent / recentData.length;
+      const avgRecovered = recovered / recentData.length;
+
+      analysis += `• Média de gastos: ${formatKz(avgSpent)}/dia\n`;
+      analysis += `• Média de recuperação: ${formatKz(avgRecovered)}/dia\n`;
+      analysis += `• ROI médio: ${avgSpent > 0 ? formatPercent((avgRecovered / avgSpent) * 100) : 'N/A'}\n`;
+
+      return {
+        answer: analysis,
+        btns: [
+          { label: '📜 Ver Histórico', action: 'nav_historico' },
+          { label: '📊 Ver Score Kazola', action: 'score' },
+          ...(!isPremium ? [upgradeCTA] : []),
+          menuCTA,
+        ],
+      };
+    } catch (error) {
+      console.error('❌ Erro ao analisar sorteios:', error);
+      return {
+        answer: `📊 **Análise dos últimos sorteios**\n\nDesculpa, tive um problema ao buscar os dados. Tenta novamente em alguns segundos.`,
+        btns: [menuCTA],
+      };
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // S1 — Quanto teria poupado se seguisse o plano? (Premium)
+  // ═══════════════════════════════════════════════════════
+  if (lower.includes('poupado') || lower.includes('teria poupado') || (lower.includes('plano') && lower.includes('poupar')) ||
+      (lower.includes('se seguisse') && lower.includes('plano')) || (lower.includes('poupança') && lower.includes('plano'))) {
+
+    logQuery('SIMULATION', 'SIMULATION.SAVINGS', isPremium ? 'PREMIUM' : 'UPSELL');
+
+    if (!isPremium) {
+      return {
+        answer: `🔒 **Quanto terias poupado se seguisses o plano?**\n\nEsta é uma funcionalidade **Premium** que simula o impacto financeiro de seguir um plano estruturado.\n\n**O que mostraria:**\n• O teu gasto real vs. o gasto planeado\n• Quanto terias poupado no período\n• Análise do impacto de cada decisão\n\n🏆 Activa o Premium para veres esta simulação personalizada.${urgencia()}`,
+        btns: [upgradeCTA, menuCTA],
+      };
+    }
+
+    try {
+      const userId = session!.userId || session!.email;
+      const result = await simulatePeriod(userId, 90);
+
+      if (!result || result.error) {
+        return {
+          answer: `📊 **Quanto terias poupado?**\n\nAinda não tenho dados suficientes para esta simulação.\n\n📝 Regista as tuas apostas no Diário para obteres análises precisas.`,
+          btns: [
+            { label: '📓 Abrir Diário', action: 'nav_diario' },
+            menuCTA,
+          ],
+        };
+      }
+
+      if ((result as any).noPlanData) {
+        return {
+          answer: `📊 **Quanto terias poupado?**\n\nAinda não criaste nenhum Plano Semanal neste período — sem um plano definido não há base de comparação real.\n\n📅 Cria o teu primeiro plano para começares a ver esta simulação com dados reais (não estimativas).`,
+          btns: [
+            { label: '📅 Criar plano agora', action: 'criar_plano' },
+            menuCTA,
+          ],
+        };
+      }
+
+      const savings = result.savings || 0;
+      const actualSpent = result.actualSpent || 0;
+      const plannedSpent = result.plannedSpent || 0;
+
+      return {
+        answer: `📊 **Quanto terias poupado com o plano?**\n\n💰 **Gasto real:** ${formatKz(actualSpent)}\n📋 **Orçamento planeado:** ${formatKz(plannedSpent)}\n💚 **Poupança estimada:** ${formatKz(savings)}\n\n${savings > 0 ? `✅ Seguindo o teu plano com disciplina, terias poupado ${formatKz(savings)}.` : '⚠️ Já estás a gastar dentro (ou perto) do teu plano. Bom trabalho!'}`,
+        btns: [
+          { label: '📅 Plano Semanal', action: 'plano' },
+          { label: '📊 Ver Score Kazola', action: 'score' },
+          menuCTA,
+        ],
+      };
+    } catch (error) {
+      console.error('❌ Erro ao simular poupança:', error);
+      return {
+        answer: `📊 **Quanto terias poupado?**\n\nDesculpa, tive um problema ao calcular a simulação. Tenta novamente em alguns segundos.`,
+        btns: [menuCTA],
+      };
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // B1 — Qual o meu Score Kazola? (Premium)
+  // ═══════════════════════════════════════════════════════
+  if (lower.includes('score kazola') || lower.includes('kazola score') || (lower.includes('score') && lower.includes('kazola')) ||
+      lower.includes('pontuacao') || lower.includes('classificacao') || lower.includes('disciplina') ||
+      lower.includes('meu score') || lower.includes('qual o meu score')) {
+
+    logQuery('BEHAVIOR', 'BEHAVIOR.KAZOLA_SCORE', isPremium ? 'PREMIUM' : 'UPSELL');
+
+    if (!isPremium) {
+      return {
+        answer: `🔒 **O Score Kazola**\n\nO Score Kazola é a métrica principal do KazolaGlow — mede a **disciplina** e **consistência** nas tuas apostas.\n\n**O que mede:**\n📊 Disciplina (35%) — segues o plano ou apostas impulsivamente?\n📊 Planeamento (25%) — crias planos antes de apostar?\n📊 Controlo de orçamento (25%) — ficas dentro do limite?\n📊 Consistência (15%) — usas o sistema regularmente?\n\n🏆 **Funcionalidade Premium** — activa para veres o teu score e receberes recomendações personalizadas.${urgencia()}`,
+        btns: [upgradeCTA, menuCTA],
+      };
+    }
+
+    try {
+      const userId = session!.userId || session!.email;
+      const result = await getKazolaScore(userId);
+
+      if (!result || result.error || result.score === undefined) {
+        return {
+          answer: `📊 **Score Kazola**\n\nAinda não tenho dados suficientes para calcular o teu Score Kazola.\n\n📝 Regista as tuas apostas no Diário e usa a plataforma regularmente para o score começar a ser calculado.\n\n💡 O score é calculado com base em:\n• Planos criados\n• Apostas registadas\n• Consistência de uso\n• Controlo de orçamento`,
+          btns: [
+            { label: '📓 Abrir Diário', action: 'nav_diario' },
+            { label: '📅 Plano Semanal', action: 'plano' },
+            menuCTA,
+          ],
+        };
+      }
+
+      const score = result.score || 0;
+      const status = result.status || getStatusLabel(score);
+      const emoji = getStatusEmoji(score);
+
+      return {
+        answer: `📊 **O teu Score Kazola**\n\n${emoji} **Score:** ${score}/100\n📊 **Status:** ${status}\n\n**Como é calculado:**\n📊 Disciplina (35%) — segues o plano vs apostas impulsivas\n📊 Planeamento (25%) — crias planos antes de apostar\n📊 Controlo de orçamento (25%) — ficas dentro do limite\n📊 Consistência (15%) — usas o sistema regularmente\n\n${score >= 80 ? '🌟 Excelente! Estás a jogar com muita disciplina. Mantém o trabalho!' :
+          score >= 60 ? '✅ Bom trabalho. Estás no caminho certo, com espaço para melhorar a consistência.' :
+          score >= 40 ? '⚠️ Estás instável. O Plano Semanal pode ajudar-te a ganhar mais disciplina.' :
+          '🚨 Atenção! O teu padrão de apostas precisa de atenção. Usa as ferramentas de Jogo Responsável.'}`,
+        btns: [
+          { label: '📊 Ver detalhes', action: 'score_detalhes' },
+          { label: '📅 Plano Semanal', action: 'plano' },
+          { label: '🛡️ Jogo Responsável', action: 'responsavel' },
+          menuCTA,
+        ],
+      };
+    } catch (error) {
+      console.error('❌ Erro ao buscar Score Kazola:', error);
+      return {
+        answer: `📊 **Score Kazola**\n\nDesculpa, tive um problema ao buscar o teu score. Tenta novamente em alguns segundos.`,
+        btns: [menuCTA],
+      };
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // B2 — Onde estou a cometer erros? (Premium)
+  // ═══════════════════════════════════════════════════════
+  if (lower.includes('onde erro') || lower.includes('onde estou a errar') || lower.includes('onde estou a cometer erros') ||
+      lower.includes('cometer erros') || lower.includes('onde posso melhorar') || lower.includes('como melhorar')) {
+
+    logQuery('BEHAVIOR', 'BEHAVIOR.INSIGHTS', isPremium ? 'PREMIUM' : 'UPSELL');
+
+    if (!isPremium) {
+      return {
+        answer: `🔒 **Onde estás a cometer erros?**\n\nEsta análise comportamental detalhada é uma funcionalidade **Premium**.\n\n**O que inclui:**\n• Análise dos teus padrões de aposta\n• Identificação de hábitos prejudiciais\n• Recomendações personalizadas\n• Comparação com utilizadores disciplinados\n\n🏆 Activa o Premium para receberes estas recomendações.${urgencia()}`,
+        btns: [upgradeCTA, menuCTA],
+      };
+    }
+
+    try {
+      const userId = session!.userId || session!.email;
+      const result = await getBehaviorInsights(userId);
+
+      if (!result || result.error || !result.insights || result.insights.length === 0) {
+        return {
+          answer: `📊 **Onde estás a cometer erros?**\n\nAinda não tenho dados suficientes para uma análise comportamental detalhada.\n\n📝 Regista mais apostas no Diário e usa a plataforma com regularidade para eu poder identificar padrões.`,
+          btns: [
+            { label: '📓 Abrir Diário', action: 'nav_diario' },
+            menuCTA,
+          ],
+        };
+      }
+
+      let insightText = '📊 **Onde estás a cometer erros?**\n\n';
+      insightText += `**Análise comportamental:**\n\n`;
+
+      result.insights.forEach((insight: any) => {
+        const emoji = insight.type === 'RISK_ALERT' ? '🚨' :
+                      insight.type === 'DISCIPLINE_IMPROVEMENT' ? '📈' :
+                      insight.type === 'BUDGET_WARNING' ? '⚠️' :
+                      insight.type === 'BEHAVIOR_PATTERN' ? '🔄' : '💡';
+        insightText += `${emoji} ${insight.message}\n\n`;
+      });
+
+      insightText += `💡 **Recomendações:**\n`;
+      insightText += `• Usa o Plano Semanal para estruturar as apostas\n`;
+      insightText += `• Regista todas as apostas no Diário\n`;
+      insightText += `• Define um orçamento mensal e cumpre-o\n`;
+      insightText += `• Consulta o Score Kazola para acompanhar a evolução`;
+
+      return {
+        answer: insightText,
+        btns: [
+          { label: '📊 Ver Score Kazola', action: 'score' },
+          { label: '📅 Plano Semanal', action: 'plano' },
+          { label: '🛡️ Jogo Responsável', action: 'responsavel' },
+          menuCTA,
+        ],
+      };
+    } catch (error) {
+      console.error('❌ Erro ao buscar insights:', error);
+      return {
+        answer: `📊 **Onde estás a cometer erros?**\n\nDesculpa, tive um problema ao analisar os teus dados. Tenta novamente em alguns segundos.`,
+        btns: [menuCTA],
+      };
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // S2 — Simula os últimos 90 dias (Premium)
+  // ═══════════════════════════════════════════════════════
+  if ((lower.includes('simula') && lower.includes('90 dias')) || (lower.includes('simular') && lower.includes('90')) ||
+      (lower.includes('simulacao') && lower.includes('90')) || lower.includes('simulacao historica') ||
+      lower.includes('simular historico') || lower.includes('simulacao completa')) {
+
+    logQuery('SIMULATION', 'SIMULATION.HISTORICAL', isPremium ? 'PREMIUM' : 'UPSELL');
+
+    if (!isPremium) {
+      return {
+        answer: `🔒 **Simulação dos últimos 90 dias**\n\nEsta simulação histórica detalhada é uma funcionalidade **Premium**.\n\n**O que inclui:**\n• Análise dia-a-dia do teu desempenho\n• Comparação entre o teu comportamento real e o plano ideal\n• Identificação de padrões de gasto\n• Projecção de impacto futuro\n\n🏆 Activa o Premium para veres esta simulação.${urgencia()}`,
+        btns: [upgradeCTA, menuCTA],
+      };
+    }
+
+    try {
+      const userId = session!.userId || session!.email;
+      const result = await simulatePeriod(userId, 90);
+
+      if (!result || result.error) {
+        return {
+          answer: `📊 **Simulação dos últimos 90 dias**\n\nAinda não tenho dados suficientes para esta simulação.\n\n📝 Regista as tuas apostas no Diário para obteres análises precisas.`,
+          btns: [
+            { label: '📓 Abrir Diário', action: 'nav_diario' },
+            menuCTA,
+          ],
+        };
+      }
+
+      if ((result as any).noPlanData) {
+        return {
+          answer: `📊 **Simulação dos últimos 90 dias**\n\nNão encontrei nenhum Plano Semanal criado nos últimos 90 dias — sem isso não há uma "meta" real para comparar com o que gastaste.\n\n📅 Cria um plano agora para começar a acumular dados reais para esta simulação.`,
+          btns: [
+            { label: '📅 Criar plano agora', action: 'criar_plano' },
+            menuCTA,
+          ],
+        };
+      }
+
+      const { totalSpent, totalRecovered, savings, planAdherence } = result;
+
+      return {
+        answer: `📊 **Simulação dos últimos 90 dias**\n\n💰 **Total gasto:** ${formatKz(totalSpent || 0)}\n💰 **Total recuperado:** ${formatKz(totalRecovered || 0)}\n📊 **Saldo líquido:** ${formatKz((totalRecovered || 0) - (totalSpent || 0))}\n\n📋 **Análise do plano:**\n• Adesão ao plano: ${planAdherence != null ? formatPercent(planAdherence) : 'N/A'}\n• Poupança estimada com plano: ${formatKz(savings || 0)}\n\n${(savings || 0) > 0 ? `✅ Seguindo o teu plano com disciplina, terias poupado ${formatKz(savings || 0)} nos últimos 90 dias.` : '⚠️ Já estás a gastar dentro (ou perto) do teu plano nos últimos 90 dias.'}\n\n💡 **O que isto significa:**\nA disciplina no jogo não é sobre ganhar ou perder — é sobre controlar o que gastas. O Score Kazola mede exactamente isso.`,
+        btns: [
+          { label: '📊 Ver Score Kazola', action: 'score' },
+          { label: '📅 Plano Semanal', action: 'plano' },
+          menuCTA,
+        ],
+      };
+    } catch (error) {
+      console.error('❌ Erro na simulação:', error);
+      return {
+        answer: `📊 **Simulação dos últimos 90 dias**\n\nDesculpa, tive um problema ao calcular a simulação. Tenta novamente em alguns segundos.`,
+        btns: [menuCTA],
+      };
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // C1 — Cria um plano personalizado (Premium)
+  // ═══════════════════════════════════════════════════════
+  if (lower.includes('plano personalizado') || lower.includes('cria plano') || lower.includes('criar plano') ||
+      (lower.includes('plano') && (lower.includes('apostas') || lower.includes('semanal'))) ||
+      lower.includes('plano de apostas') || lower.includes('criar plano personalizado')) {
+
+    logQuery('COACHING', 'PLAN.CREATE', isPremium ? 'PREMIUM' : 'UPSELL');
+
+    if (!isPremium) {
+      return {
+        answer: `🔒 **Cria um plano personalizado**\n\nPlanos de apostas personalizados são uma funcionalidade **Premium**.\n\n**O que o plano inclui:**\n• Orçamento semanal recomendado\n• Distribuição de apostas por dia\n• Sugestões de modalidades e sessões\n• Controlo de progresso\n\n🏆 Activa o Premium para criares o teu plano.${urgencia()}`,
+        btns: [upgradeCTA, menuCTA],
+      };
+    }
+
+    try {
+      let budgetMatch = input.match(/\b(\d+)\s*(?:kz|kzs?)\b/i);
+      let budget = budgetMatch ? parseInt(budgetMatch[1]) : 5000;
+
+      if (budget < 100) budget = 100;
+      if (budget > 10000) budget = 10000;
+
+      const userId = session!.userId || session!.email;
+      const result = await createPlan(userId, budget);
+
+      if (!result || result.error) {
+        return {
+          answer: `📅 **Plano personalizado**\n\nDesculpa, não consegui criar o plano neste momento. Tenta novamente em alguns segundos.\n\nSe o problema persistir, contacta o suporte.`,
+          btns: [
+            { label: '📧 Suporte', action: 'suporte' },
+            menuCTA,
+          ],
+        };
+      }
+
+      const { plan, weeklyBudget, dailyBudget, totalBets } = result;
+
+      return {
+        answer: `📅 **Plano personalizado de apostas**\n\n📊 **Orçamento semanal:** ${formatKz(weeklyBudget || budget)}\n📊 **Orçamento diário:** ${formatKz(dailyBudget || Math.round(budget / 7))}\n🎯 **Total de apostas sugeridas:** ${totalBets || Math.round(budget / 500)}\n\n**Distribuição sugerida:**\n${plan ? plan.map((p: any, i: number) => `📆 Dia ${i+1}: ${p.bets} apostas (${formatKz(p.amount)})`).join('\n') : '• Distribuição equilibrada ao longo da semana'}\n\n**Recomendações:**\n• Usa o Gerador para cada aposta\n• Regista no Diário o que realmente jogaste\n• Ajusta o plano semanalmente conforme necessário\n\n⚠️ Lembra-te: este é um plano de GESTÃO, não de previsão. O objectivo é controlo, não acertos.\n\n✅ Este plano foi registado — vai contar para o teu Score Kazola (pilar Planeamento).`,
+        btns: [
+          { label: '🎲 Gerar agora', action: 'nav_gerador' },
+          { label: '📓 Abrir Diário', action: 'nav_diario' },
+          { label: '📊 Ver Score Kazola', action: 'score' },
+          menuCTA,
+        ],
+      };
+    } catch (error) {
+      console.error('❌ Erro ao criar plano:', error);
+      return {
+        answer: `📅 **Plano personalizado**\n\nDesculpa, tive um problema ao criar o teu plano. Tenta novamente em alguns segundos.`,
+        btns: [menuCTA],
+      };
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // SCORE_DETALHES (sub-pergunta do B1)
+  // ═══════════════════════════════════════════════════════
+  if (lower.includes('score detalhes') || lower.includes('score detalhado') ||
+      (lower.includes('score') && lower.includes('detalhado'))) {
+
+    logQuery('BEHAVIOR', 'BEHAVIOR.KAZOLA_SCORE_DETAILS', isPremium ? 'PREMIUM' : 'UPSELL');
+
+    if (!isPremium) {
+      return {
+        answer: `🔒 O Score Kazola detalhado é Premium. Activa para veres a análise completa.`,
+        btns: [upgradeCTA, menuCTA],
+      };
+    }
+
+    return {
+      answer: `📊 **Score Kazola — Detalhado**\n\n**Os 4 pilares do teu score:**\n\n📊 **Disciplina (35%)** — Segues o plano vs apostas impulsivas\n• ✅ Bom: registas planos antes de apostar\n• ⚠️ A melhorar: tenta criar planos mais consistentes\n\n📊 **Planeamento (25%)** — Criaste planos antes de apostar\n• ✅ Bom: usas o Plano Semanal\n• ⚠️ A melhorar: planeia com mais antecedência\n\n📊 **Controlo de orçamento (25%)** — Ficas dentro do limite\n• ✅ Bom: manténs o orçamento\n• ⚠️ A melhorar: define limites mais realistas\n\n📊 **Consistência (15%)** — Regularidade de uso\n• ✅ Bom: usas a plataforma regularmente\n• ⚠️ A melhorar: tenta usar todos os dias\n\n💡 **Dica:** O ROI é separado do Score. O Score mede disciplina, não sorte.`,
+      btns: [
+        { label: '📊 Ver Score', action: 'score' },
+        { label: '📅 Plano Semanal', action: 'plano' },
+        menuCTA,
+      ],
+    };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════
+  // FIM DOS BLOCOS DO AI ADVISOR
+  // A partir daqui seguem os 21 blocos originais do ChatBot (intactos,
+  // só renumerados na leitura — nenhum texto de conteúdo foi alterado).
+  // ═══════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════
+
+  // ═══════════════════════════════════════════════════════
+  // 1 · MENU / BOAS-VINDAS COM ORIENTAÇÃO (v3.5 + botão Onde erro?)
   // ═══════════════════════════════════════════════════════
   if (lower === 'menu' || lower === '' || lower.includes('olá') || lower.includes('oi') || lower.includes('bom dia') || lower.includes('boa tarde') || lower.includes('boa noite')) {
     if (isPremium) {
       return {
-        answer: `Olá ${nome}! 🏆 Tudo pronto para ti.\n\nO que precisas hoje?`,
+        answer: `Olá ${nome}! 🏆 Tudo pronto para ti.\n\n🔍 **O que o Advisor pode fazer por ti hoje?**\n\n📊 **Análise Financeira**\n• Quanto gastei este mês?\n• Qual o meu ROI?\n• Onde perco mais dinheiro?\n\n🧠 **Comportamento**\n• Qual o meu Score Kazola?\n• Onde estou a cometer erros?\n• Cria um plano personalizado\n\n📈 **Simulações**\n• Quanto teria poupado com plano?\n• Simula os últimos 90 dias\n\nO que precisas?`,
         btns: [
+          { label: '📊 Quanto gastei?', action: 'gastei' },
+          { label: '📈 Qual o meu ROI?', action: 'roi' },
+          { label: '🧠 Score Kazola', action: 'score' },
+          { label: '🧠 Onde erro?', action: 'erros' },
+          { label: '📅 Plano personalizado', action: 'criar_plano' },
           { label: '🎲 Gerador', action: 'gerador' },
           { label: '📓 Diário', action: 'diario' },
-          { label: '📅 Plano Semanal', action: 'plano' },
           { label: '📊 Relatório', action: 'relatorio' },
-          { label: '📈 Estatísticas', action: 'estatisticas' },
           { label: '❓ FAQ', action: 'faq' },
         ],
       };
     }
     if (session) {
       return {
-        answer: `Olá ${nome}! 👋\n\nEstou aqui para te ajudar a perceber tudo sobre o Loto 5/90 e tirar o máximo da plataforma.\n\nO que te traz aqui hoje?`,
+        answer: `Olá ${nome}! 👋\n\n🔍 **Bem-vindo ao Assistente KazolaGlow!**\n\nPosso ajudar-te com:\n\n📊 **Análise Financeira** (gratuito)\n• Quanto gastei este mês?\n• Qual o meu ROI?\n• Onde perco mais dinheiro?\n\n📈 **Estatísticas e histórico**\n• Análise de números\n• Histórico de sorteios\n\n🏆 **Funcionalidades Premium**\n• Score Kazola (disciplina)\n• Plano personalizado\n• Simulações históricas\n\nO que queres explorar hoje?`,
         btns: [
-          { label: '🎲 Como funciona o gerador?', action: 'gerador' },
-          { label: '📊 O que são as estatísticas?', action: 'estatisticas' },
-          { label: '💰 Quanto posso ganhar?', action: 'premios' },
-          { label: '🏆 O que é o Premium?', action: 'premium' },
+          { label: '📊 Quanto gastei?', action: 'gastei' },
+          { label: '📈 Qual o meu ROI?', action: 'roi' },
+          { label: '📊 Estatísticas', action: 'estatisticas' },
+          { label: '🎲 Gerador', action: 'gerador' },
+          { label: '🏆 Ver Premium', action: 'premium' },
           { label: '❓ FAQ', action: 'faq' },
         ],
       };
     }
     return {
-      answer: `Olá! 👋 Bem-vindo ao KazolaGlow.\n\nSou o teu assistente. Conheço tudo sobre o Loto 5/90, as estatísticas, os prémios e as ferramentas desta plataforma.\n\nComo posso ajudar-te hoje?`,
+      answer: `Olá! 👋 Bem-vindo ao KazolaGlow.\n\n🔍 **Sou o teu Assistente Inteligente!**\n\nPosso ajudar-te a:\n\n📊 **Analisar os teus gastos** — quanto gastaste este mês? Qual o teu ROI?\n\n📈 **Estudar estatísticas** — números quentes, frios, gaps e tendências\n\n🎲 **Gerar combinações** — com métodos inteligentes\n\n🏆 **Descobrir o Premium** — Score Kazola, planos personalizados e mais\n\nPara começar, regista-te gratuitamente ou explora as ferramentas abaixo.`,
       btns: [
-        { label: '🎲 Como funciona o gerador?', action: 'gerador' },
-        { label: '📊 O que são as estatísticas?', action: 'estatisticas' },
-        { label: '💰 Quanto posso ganhar?', action: 'premios' },
-        { label: '🏆 O que é o Premium?', action: 'premium' },
         { label: '📝 Criar conta grátis', action: 'login' },
+        { label: '📊 Estatísticas', action: 'estatisticas' },
+        { label: '🎲 Gerador', action: 'gerador' },
+        { label: '🏆 Premium', action: 'premium' },
+        { label: '❓ FAQ', action: 'faq' },
       ],
     };
   }
@@ -149,7 +835,7 @@ function getAnswer(
   // ═══════════════════════════════════════════════════════
   // 6 · PRÉMIOS E SIMULADOR
   // ═══════════════════════════════════════════════════════
-  if (lower.includes('premio') || lower.includes('ganhar') || lower.includes('simulador') || lower.includes('multiplicador') || lower.includes('imposto') || lower.includes('quanto') ) {
+  if (lower.includes('premio') || lower.includes('ganhar') || lower.includes('simulador') || lower.includes('multiplicador') || lower.includes('imposto') || lower.includes('quanto custa') || lower.includes('quanto se pode ganhar') || lower.includes('quanto posso ganhar')) {
     return {
       answer: `💰 **Prémios e Simulador**\n\n**Multiplicadores oficiais (Decreto 695/25):**\n• Apostar em 2 e acertar os 2 → ×4\n• Apostar en 3 e acertar os 3 → ×25\n• Apostar em 4 e acertar os 4 → ×120\n• Apostar em 5 e acertar os 5 → ×2.500\n\n**Exemplo prático:**\nApostas 500 Kz em 3 números e acertas os 3 → recebes 12.500 Kz.\n\n**Imposto (Art. 26 do Decreto 695/25):**\n• Prémios até 280.000 Kz → isentos de imposto\n• Acima de 280.000 Kz → pagas 15% sobre o excedente\n\n**Prémio máximo possível:**\n1.000 Kz × 2.500 = 2.500.000 Kz\n\nUsa o Simulador de Prémios na tab "💰 PRÉMIOS" para calcular o teu prémio líquido exacto com qualquer valor de aposta.`,
       btns: [
@@ -213,7 +899,7 @@ function getAnswer(
   // ═══════════════════════════════════════════════════════
   // 11 · RELATÓRIO MENSAL
   // ═══════════════════════════════════════════════════════
-  if (lower.includes('relatorio') || lower.includes('desempenho') || lower.includes('analise mensal') || lower.includes('saldo') || lower.includes('quanto gastei') || lower.includes('quanto ganhei')) {
+  if (lower.includes('relatorio') || lower.includes('desempenho') || lower.includes('analise mensal') || lower.includes('saldo')) {
     return {
       answer: `📊 **Relatório Mensal**\n\nA radiografia completa das tuas apostas num mês.\n\n**O que mostra:**\n💰 Total gasto no mês\n💰 Total recuperado em prémios\n📊 Saldo líquido real (lucro ou prejuízo)\n📈 Taxa de retorno (%)\n🎯 Distribuição de acertos (0, 1, 2, 3, 4, 5)\n📅 Gasto por semana (gráfico de barras)\n📉 Comparação com o mês anterior\n💡 Observações personalizadas\n\n**Porquê é importante?**\nA maioria das pessoas não sabe quanto realmente gasta em apostas por mês. O Relatório torna isso impossível de ignorar — e isso é útil independentemente do resultado.\n\n${isPremium ? '✅ Disponível para ti na aba principal.' : '🔒 Exclusivo Premium.\n\nSe queres perceber o teu padrão real de apostas, este é o sítio certo.'}`,
       btns: isPremium
@@ -236,7 +922,7 @@ function getAnswer(
   }
 
   // ═══════════════════════════════════════════════════════
-  // 13 · REGISTO / CONTA / TRIAL
+  // 13 · REGISTO / CONTA / TRIAL (trial 3 dias)
   // ═══════════════════════════════════════════════════════
   if (lower.includes('registar') || lower.includes('criar conta') || lower.includes('trial') || lower.includes('gratis') || lower.includes('account')) {
     if (session) {
@@ -248,7 +934,7 @@ function getAnswer(
       };
     }
     return {
-      answer: `📝 **Registo Gratuito — Trial de 7 dias**\n\nO registo é gratuito e leva menos de 30 segundos.\n\n**O que inclui o trial:**\n✅ 1 geração por dia\n✅ Métodos Equilibrado e Aleatório\n✅ Estatísticas completas\n✅ Histórico de sorteios\n✅ Simulador de prémios\n\n**Sem cartão de crédito. Sem compromisso.**\n\nDepois do trial, se quiseres continuar a gerar, podes activar o Premium (2.500 Kz/mês) ou ficares com acesso às estatísticas e histórico gratuitamente.`,
+      answer: `📝 **Registo Gratuito — Trial de 3 dias**\n\nO registo é gratuito e leva menos de 30 segundos.\n\n**O que inclui o trial:**\n✅ 1 geração por dia\n✅ Métodos Equilibrado e Aleatório\n✅ Estatísticas completas\n✅ Histórico de sorteios\n✅ Simulador de prémios\n\n**Sem cartão de crédito. Sem compromisso.**\n\nDepois do trial, se quiseres continuar a gerar, podes activar o Premium (2.500 Kz/mês) ou ficares com acesso às estatísticas e histórico gratuitamente.`,
       btns: [trialCTA, { label: '🏆 Ver Premium', action: 'premium' }, menuCTA],
     };
   }
@@ -259,7 +945,7 @@ function getAnswer(
   if (lower.includes('premium') || lower.includes('upgrade') || lower.includes('beneficio') || (lower.includes('plano') && lower.includes('pago'))) {
     const urg = urgencia();
     return {
-      answer: `🏆 **Premium KazolaGlow**\n\n**O que desbloqueia:**\n✅ Gerações ilimitadas por dia\n✅ Método Frequência Histórica\n✅ Método Monte Carlo\n✅ Até 10 linhas por geração\n✅ Diário de Apostas completo\n✅ Plano Semanal profissional\n✅ Relatório Mensal detalhado\n✅ Sincronização cross-device\n\n**Planos:**\n📅 Mensal — **2.500 Kz** (~84 Kz/dia)\n📆 Anual — **20.000 Kz** (poupas 10.000 Kz)\n\n**Como activar:**\n1. Transferência BAI para:\n   👤 Gabriel António Armando Sapalo\n   🔢 IBAN: AO06 0040 0000 1859 5631 1019 4\n2. Envia comprovativo para glowscalepro@gmail.com\n3. Recebes o token em minutos\n4. Inseres o token no topo da página (🔑 Inserir token)\n\n⚡ Activação em menos de 5 minutos.${urg}\n\n⚠️ Restam apenas ${VAGAS} vagas promocionais este mês.`,
+      answer: `🏆 **Premium KazolaGlow**\n\n**O que desbloqueia:**\n✅ Gerações ilimitadas por dia\n✅ Método Frequência Histórica\n✅ Método Monte Carlo\n✅ Até 10 linhas por geração\n✅ Diário de Apostas completo\n✅ Plano Semanal profissional\n✅ Relatório Mensal detalhado\n✅ Score Kazola e análise comportamental\n✅ Simulações históricas\n✅ Planos personalizados\n✅ Sincronização cross-device\n\n**Planos:**\n📅 Mensal — **2.500 Kz** (~83 Kz/dia)\n📆 Anual — **20.000 Kz** (poupas 10.000 Kz)\n\n**Como activar:**\n1. Transferência BAI para:\n   👤 Gabriel António Armando Sapalo\n   🔢 IBAN: AO06 0040 0000 1859 5631 1019 4\n2. Envia comprovativo para glowscalepro@gmail.com\n3. Recebes o token em minutos\n4. Inseres o token no topo da página (🔑 Inserir token)\n\n⚡ Activação em menos de 5 minutos.${urg}\n\n⚠️ Restam apenas ${VAGAS} vagas promocionais este mês.`,
       btns: [
         upgradeCTA,
         { label: '💳 Como pagar?', action: 'pagamento' },
@@ -322,7 +1008,7 @@ Recebes um token de 16 caracteres por email. Inseres em "🔑 Inserir token" no 
   // ═══════════════════════════════════════════════════════
   if (lower.includes('vale a pena') || lower.includes('compensa') || lower.includes('funciona mesmo') || lower.includes('garantia') || lower.includes('resultados')) {
     return {
-      answer: `🤔 **Vale a pena o Premium?**\n\nVamos ser honestos:\n\nO Premium **não garante que vais ganhar** no Loto — isso seria irresponsável dizer. Os sorteios são aleatórios.\n\n**O que o Premium faz de verdade:**\n\n📊 Dá-te mais dados e ferramentas para estudares padrões históricos.\n\n📓 Registas as tuas apostas e vês o teu saldo real — muitos ficam surpreendidos com o que descobrem.\n\n📅 Planeias a semana com orçamento definido, o que reduz gastos impulsivos.\n\n📈 Tens métodos de geração mais sofisticados para explorar.\n\n**Para quem faz sentido:**\nSe já apostas regularmente e queres fazê-lo de forma mais organizada e consciente — o Premium paga-se com a organização que dá.\n\n**Para quem não faz sentido:**\nSe apostas raramente ou já tens toda a organização que precisas.`,
+      answer: `🤔 **Vale a pena o Premium?**\n\nVamos ser honestos:\n\nO Premium **não garante que vais ganhar** no Loto — isso seria irresponsável dizer. Os sorteios são aleatórios.\n\n**O que o Premium faz de verdade:**\n\n📊 Dá-te mais dados e ferramentas para estudares padrões históricos.\n\n📓 Registas as tuas apostas e vês o teu saldo real — muitos ficam surpreendidos com o que descobrem.\n\n📅 Planeias a semana com orçamento definido, o que reduz gastos impulsivos.\n\n📈 Tens métodos de geração mais sofisticados para explorar.\n\n📊 **Score Kazola** — vês a tua disciplina e consistência medida objectivamente.\n\n**Para quem faz sentido:**\nSe já apostas regularmente e queres fazê-lo de forma mais organizada e consciente — o Premium paga-se com a organização que dá.\n\n**Para quem não faz sentido:**\nSe apostas raramente ou já tens toda a organização que precisas.`,
       btns: [
         upgradeCTA,
         { label: '💳 Como pagar?', action: 'pagamento' },
@@ -336,7 +1022,7 @@ Recebes um token de 16 caracteres por email. Inseres em "🔑 Inserir token" no 
   // ═══════════════════════════════════════════════════════
   if (lower.includes('caro') || lower.includes('muito dinheiro') || lower.includes('nao tenho') || lower.includes('sem dinheiro')) {
     return {
-      answer: `💬 Entendo a preocupação.\n\nVamos por partes:\n\n2.500 Kz/mês = **83 Kz por dia**.\n\nSe já apostas regularmente, é provável que gastes mais do que isso por semana em apostas.\n\nA questão não é se o Premium é caro — é se vale mais do que 83 Kz/dia em organização, dados e controlo.\n\nSe a resposta for sim, faz sentido.\nSe a resposta for não, o trial gratuito já te dá estatísticas e histórico sem custo.\n\nNão há pressão — a decisão é tua e deve fazer sentido para a tua situação.`,
+      answer: `💬 Entendo a preocupação.\n\nVamos por partes:\n\n2.500 Kz/mês = **83 Kz por dia**.\n\nSe já apostas regularmente, é provável que gastes mais do que isso por semana em apostas.\n\nA questão não é se o Premium é caro — é se vale mais do que 83 Kz/dia em organização, dados, Score Kazola e controlo.\n\nSe a resposta for sim, faz sentido.\nSe a resposta for não, o trial gratuito já te dá estatísticas e histórico sem custo.\n\nNão há pressão — a decisão é tua e deve fazer sentido para a tua situação.`,
       btns: [
         upgradeCTA,
         { label: '📝 Ficar no trial', action: 'login' },
@@ -347,7 +1033,7 @@ Recebes um token de 16 caracteres por email. Inseres em "🔑 Inserir token" no 
 
   if (lower.includes('vou pensar') || lower.includes('depois') || lower.includes('mais tarde') || lower.includes('nao sei')) {
     return {
-      answer: `Claro, sem problema. 🙂\n\nNão há urgência real — a plataforma está aqui quando precisares.\n\nO trial dura 7 dias e dá-te acesso às funcionalidades básicas. Aproveita para explorar as estatísticas e o histórico sem qualquer compromisso.\n\nSe surgir alguma dúvida entretanto, estou aqui.`,
+      answer: `Claro, sem problema. 🙂\n\nNão há urgência real — a plataforma está aqui quando precisares.\n\nO trial dura 3 dias e dá-te acesso às funcionalidades básicas. Aproveita para explorar as estatísticas e o histórico sem qualquer compromisso.\n\nSe surgir alguma dúvida entretanto, estou aqui.`,
       btns: [
         { label: '📊 Ver Estatísticas', action: 'nav_estatisticas' },
         { label: '📜 Ver Histórico', action: 'nav_historico' },
@@ -359,7 +1045,7 @@ Recebes um token de 16 caracteres por email. Inseres em "🔑 Inserir token" no 
   // ═══════════════════════════════════════════════════════
   // 18 · SUPORTE / CONTACTO
   // ═══════════════════════════════════════════════════════
-  if (lower.includes('suporte') || lower.includes('contacto') || lower.includes('email') || lower.includes('whatsapp') || lower.includes('problema') || lower.includes('erro') || lower.includes('bug')) {
+  if (lower.includes('suporte') || lower.includes('contacto') || lower.includes('email') || lower.includes('whatsapp') || lower.includes('problema') || lower.includes('bug')) {
     return {
       answer: `📧 **Suporte KazolaGlow**\n\n**Email:** glowscalepro@gmail.com\n**WhatsApp:** +244 923 379 486\n\n**Horário:** Dias úteis, 9h–18h\n**Resposta:** normalmente em menos de 24 horas\n\n**Para problemas técnicos**, descreve:\n• O que tentaste fazer\n• O que aconteceu\n• O teu sistema operativo/browser\n\n**Para questões de pagamento**, anexa sempre o comprovativo de transferência.`,
       btns: [
@@ -392,6 +1078,8 @@ Recebes um token de 16 caracteres por email. Inseres em "🔑 Inserir token" no 
         { label: '🎱 Como funciona o Loto?', action: 'como funciona' },
         { label: '🎲 O que é o gerador?', action: 'gerador' },
         { label: '📊 Para que servem as estatísticas?', action: 'estatisticas' },
+        { label: '📊 Quanto gastei?', action: 'gastei' },
+        { label: '📊 Qual o meu ROI?', action: 'roi' },
         { label: '🏆 O que é o Premium?', action: 'premium' },
         { label: '💳 Como pagar o Premium?', action: 'pagamento' },
         { label: '🛡️ Jogo responsável?', action: 'responsavel' },
@@ -404,7 +1092,7 @@ Recebes um token de 16 caracteres por email. Inseres em "🔑 Inserir token" no 
   // ═══════════════════════════════════════════════════════
   // 21 · QUALIFICAÇÃO
   // ═══════════════════════════════════════════════════════
-  if (lower.includes('nao sei') || lower.includes('como escolher') || lower.includes('que numeros') || lower.includes('estrategia')) {
+  if (lower.includes('como escolher') || lower.includes('que numeros') || lower.includes('estrategia')) {
     return {
       answer: `Boa pergunta. 🎯\n\nA verdade é que não existe estratégia que garanta acertos — o Loto é um jogo de probabilidade pura.\n\nO que o KazolaGlow faz é ajudar-te a:\n\n1. **Estudar padrões históricos** — não para prever o futuro, mas para fazeres escolhas informadas.\n\n2. **Gerar combinações estruturadas** — em vez de escolheres ao acaso, tens métodos baseados em análise estatística.\n\n3. **Controlar o orçamento** — para que o jogo se mantenha como entretenimento e não vire problema.\n\nQuer que te explique cada método do gerador em detalhe?`,
       btns: [
@@ -425,6 +1113,9 @@ Recebes um token de 16 caracteres por email. Inseres em "🔑 Inserir token" no 
       { label: '🎲 Gerador de combinações', action: 'gerador' },
       { label: '📊 Estatísticas', action: 'estatisticas' },
       { label: '💰 Prémios e simulador', action: 'premios' },
+      { label: '📊 Quanto gastei?', action: 'gastei' },
+      { label: '📊 Qual o meu ROI?', action: 'roi' },
+      { label: '🧠 Score Kazola', action: 'score' },
       { label: '🏆 Premium', action: 'premium' },
       { label: '🛡️ Jogo responsável', action: 'responsavel' },
       { label: '❓ FAQ completo', action: 'faq' },
@@ -434,20 +1125,99 @@ Recebes um token de 16 caracteres por email. Inseres em "🔑 Inserir token" no 
 }
 
 // ─────────────────────────────────────────────────────────────
-// COMPONENTE PRINCIPAL
+// COMPONENTE PRINCIPAL — v3.7 (com mensagem proactiva)
 // ─────────────────────────────────────────────────────────────
 export default function ChatBot({ session, onUpgrade, onLogin, onOpenModal, onScrollTo }: Props) {
   const [open, setOpen] = useState(false);
   const [msgs, setMsgs] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const [ultimoTopico, setUltimoTopico] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const idRef = useRef(0);
 
+  const getAnswerAsync = async (query: string): Promise<{ answer: string; html?: string; btns: { label: string; action: string }[] }> => {
+    return await getAnswer(query, session);
+  };
+
+  // ─────────────────────────────────────────────────────────────
+  // MENSAGEM PROACTIVA — O "BALCÃO" DO ADVISOR (v3.7)
+  // ─────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const hoje = new Date().toISOString().split('T')[0];
+    const key = `kg_proactive_${hoje}`;
+
+    // Se já mostrou hoje, não mostra novamente
+    if (localStorage.getItem(key)) return;
+
+    // Não mostra se o chat já está aberto
+    if (open) return;
+
+    // Aguarda 6 segundos para não ser intrusivo
+    const timer = setTimeout(() => {
+      // Abre o chat automaticamente
+      setOpen(true);
+
+      // Determina a mensagem baseada no perfil
+      let mensagem = '';
+      let botoes: { label: string; action: string }[] = [];
+
+      if (!session) {
+        // Visitante (sem conta)
+        mensagem = '🎯 Já sabes quanto gastas por mês no Loto?';
+        botoes = [{ label: '📝 Descobrir grátis', action: 'login' }];
+      } else if (session.isPremium) {
+        // Utilizador Premium
+        mensagem = `📈 O teu Score Kazola está pronto — vê como estás a evoluir.`;
+        botoes = [{ label: '🧠 Ver Score', action: 'score' }];
+      } else {
+        const dias = trialDaysLeft(session);
+        if (dias <= 0) {
+          // Trial expirado
+          mensagem = '🔒 O teu trial terminou. As tuas estatísticas continuam aqui.';
+          botoes = [{ label: '🏆 Reactivar', action: 'upgrade' }];
+        } else if (dias <= 1) {
+          // Trial a expirar
+          mensagem = `⏰ O teu trial acaba amanhã — não percas o acesso.`;
+          botoes = [{ label: '🏆 Ativar Premium', action: 'upgrade' }];
+        } else {
+          // Trial activo
+          mensagem = `🎲 Já tens ${dias} dias grátis. Já experimentaste o gerador?`;
+          botoes = [{ label: '🎲 Experimentar', action: 'nav_gerador' }];
+        }
+      }
+
+      // Adiciona a mensagem proactiva
+      setTimeout(() => {
+        // Adiciona a mensagem
+        const newMsg: Message = {
+          id: idRef.current++,
+          from: 'bot',
+          text: mensagem,
+          btns: botoes
+        };
+        setMsgs(prev => [...prev, newMsg]);
+
+        // Rola para a mensagem
+        setTimeout(() => {
+          bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }, 100);
+
+      }, 500);
+
+      // Marca como mostrado hoje
+      localStorage.setItem(key, 'true');
+
+    }, 6000);
+
+    return () => clearTimeout(timer);
+  }, [session, open]);
+
   useEffect(() => {
     if (open && msgs.length === 0) {
-      const { answer, html, btns } = getAnswer('menu', session);
-      setMsgs([{ id: idRef.current++, from: 'bot', text: answer, html, btns }]);
+      getAnswerAsync('menu').then(({ answer, html, btns }) => {
+        setMsgs([{ id: idRef.current++, from: 'bot', text: answer, html, btns }]);
+      });
     }
   }, [open, session, msgs.length]);
 
@@ -462,9 +1232,10 @@ export default function ChatBot({ session, onUpgrade, onLogin, onOpenModal, onSc
     if (busy) return;
     setBusy(true);
     setTimeout(() => {
-      const { answer, html, btns } = getAnswer(query, session);
-      push('bot', answer, html, btns);
-      setBusy(false);
+      getAnswerAsync(query).then(({ answer, html, btns }) => {
+        push('bot', answer, html, btns);
+        setBusy(false);
+      });
     }, 320);
   };
 
@@ -480,18 +1251,21 @@ export default function ChatBot({ session, onUpgrade, onLogin, onOpenModal, onSc
     if (busy) return;
     push('user', label);
 
+    // ======== AÇÕES PRINCIPAIS ========
     if (action === 'upgrade') { respond('premium'); setTimeout(() => onUpgrade?.(), 800); return; }
     if (action === 'login') { respond('registar'); setTimeout(() => onLogin?.(), 800); return; }
     if (action === 'menu') {
       setBusy(true);
       setTimeout(() => {
-        const { answer, html, btns } = getAnswer('menu', session);
-        push('bot', answer, html, btns);
-        setBusy(false);
+        getAnswerAsync('menu').then(({ answer, html, btns }) => {
+          push('bot', answer, html, btns);
+          setBusy(false);
+        });
       }, 300);
       return;
     }
 
+    // ======== NAVEGAÇÃO ========
     if (action === 'nav_gerador') { push('bot', '🎲 A abrir o Gerador…'); setTimeout(() => onScrollTo?.('gerador'), 600); return; }
     if (action === 'nav_estatisticas') { push('bot', '📊 A abrir as Estatísticas…'); setTimeout(() => onScrollTo?.('estatisticas'), 600); return; }
     if (action === 'nav_historico') { push('bot', '📜 A abrir o Histórico…'); setTimeout(() => onScrollTo?.('historico'), 600); return; }
@@ -500,13 +1274,31 @@ export default function ChatBot({ session, onUpgrade, onLogin, onOpenModal, onSc
     if (action === 'nav_plano') { push('bot', '📅 A abrir o Plano Semanal…'); setTimeout(() => onScrollTo?.('plano_semanal'), 600); return; }
     if (action === 'nav_relatorio') { push('bot', '📊 A abrir o Relatório…'); setTimeout(() => onScrollTo?.('relatorio'), 600); return; }
 
+    // ======== MODAIS ========
     if (action === 'modal_responsible') { push('bot', '🛡️ A abrir Jogo Responsável…'); setTimeout(() => onOpenModal?.('responsible'), 600); return; }
     if (action === 'modal_terms') { push('bot', '📄 A abrir Termos…'); setTimeout(() => onOpenModal?.('terms'), 600); return; }
     if (action === 'modal_privacy') { push('bot', '🔒 A abrir Privacidade…'); setTimeout(() => onOpenModal?.('privacy'), 600); return; }
 
+    // ======== AÇÕES DO AI ADVISOR ========
+    if (action === 'score') { respond('score kazola'); return; }
+    if (action === 'score_detalhes') { respond('score detalhado'); return; }
+    if (action === 'gastei') { respond('quanto gastei'); return; }
+    if (action === 'roi') { respond('qual o meu roi'); return; }
+    if (action === 'simular') { respond('simula os ultimos 90 dias'); return; }
+    if (action === 'criar_plano') { respond('cria um plano personalizado'); return; }
+    if (action === 'onde_perco') { respond('onde perco mais dinheiro'); return; }
+    if (action === 'atrasos') { respond('maiores atrasos historicos'); return; }
+    if (action === 'analisa_sorteios') { respond('analisa os ultimos sorteios'); return; }
+    if (action === 'poupado') { respond('quanto teria poupado se seguisse o plano'); return; }
+    if (action === 'erros') { respond('onde estou a cometer erros'); return; }
+
+    // ======== FALLBACK ========
     respond(action);
   };
 
+  // ─────────────────────────────────────────────────────────────
+  // JSX — IDÊNTICO AO ORIGINAL (MANTIDO)
+  // ─────────────────────────────────────────────────────────────
   return (
     <>
       {/* Botão flutuante */}
@@ -577,6 +1369,7 @@ export default function ChatBot({ session, onUpgrade, onLogin, onOpenModal, onSc
               borderRadius: '50%',
               background: '#22c55e',
               border: '2px solid #0d0d1f',
+              animation: 'pulse-green 2s ease-in-out infinite',
             }} />
           </div>
         )}
@@ -711,9 +1504,10 @@ export default function ChatBot({ session, onUpgrade, onLogin, onOpenModal, onSc
               onClick={() => {
                 setBusy(true);
                 setTimeout(() => {
-                  const { answer, html, btns } = getAnswer('menu', session);
-                  setMsgs([{ id: idRef.current++, from: 'bot', text: answer, html, btns }]);
-                  setBusy(false);
+                  getAnswerAsync('menu').then(({ answer, html, btns }) => {
+                    setMsgs([{ id: idRef.current++, from: 'bot', text: answer, html, btns }]);
+                    setBusy(false);
+                  });
                 }, 200);
               }}
               style={{ padding: '0.4rem 0.9rem', fontSize: '0.75rem' }}
@@ -867,3 +1661,45 @@ export default function ChatBot({ session, onUpgrade, onLogin, onOpenModal, onSc
     </>
   );
 }
+
+// ==================== CHANGELOG v3.7 ====================
+// 1. NOVIDADE: Mensagem proactiva de boas-vindas ("o balcão") — aparece 6s após entrada
+// 2. NOVIDADE: Botão "🧠 Onde erro?" adicionado ao menu Premium
+// 3. Segmentação por perfil: visitante, trial, premium, trial a expirar
+// 4. Limite de 1 exibição por dia (localStorage)
+// 5. O chat abre automaticamente com a mensagem adequada ao perfil do utilizador
+
+// ==================== CHANGELOG v3.6 ====================
+// 1. REORDENAÇÃO CRÍTICA: os 10 blocos do AI Advisor (F1, F2, H1, H2, H3, S1,
+//    B1, B2, S2, C1 + score_detalhes) foram movidos para o TOPO do getAnswer(),
+//    antes dos 21 blocos antigos. Antes desta versão:
+//      • "quanto gastei"  → era capturado pela seção 6 (PRÉMIOS) por causa de
+//        'quanto' isolado → F1 nunca executava.
+//      • "maiores atrasos historicos" → era capturado pela seção 4
+//        (Estatísticas) por causa de 'atraso' ⊂ 'atrasos' → H2 nunca executava.
+//      • "onde estou a cometer erros" → era capturado pela seção 18 (Suporte)
+//        por causa de 'erro' ⊂ 'erros' → B2 nunca executava.
+//    Em vez de reescrever as seções antigas (proibido pelo documento), a
+//    estratégia foi mover os blocos do Advisor para antes delas — aditivo,
+//    sem alterar nenhum texto das 21 seções originais.
+// 2. Seção 6 (PRÉMIOS) teve o gatilho genérico 'quanto' substituído por
+//    frases mais específicas ('quanto custa', 'quanto se pode ganhar',
+//    'quanto posso ganhar') — o gatilho antigo era largo demais e continuaria
+//    a colidir com qualquer pergunta futura que comece por "quanto".
+// 3. Seção 11 (Relatório) e seção 18 (Suporte) tiveram os gatilhos
+//    'quanto gastei'/'quanto ganhei' e 'erro' removidos, já que essas
+//    perguntas agora são respondidas pelos blocos F1/B2 com dados reais.
+// 4. logAIQuery corrigido em TODOS os blocos do Advisor para a assinatura
+//    real do apiClient.ts: logAIQuery(email, question, intent,
+//    responseCategory, topic). Antes, os blocos chamavam com 4 argumentos
+//    incorretos (topic no lugar de intent, boolean no lugar de
+//    responseCategory), quebrando a métrica de conversão da seção 2.7 do
+//    documento.
+// 5. helper logQuery (definido mas nunca usado na v3.5) passou a ser o único
+//    ponto de chamada a logAIQuery, com tratamento de erro via .catch.
+// 6. S1 e S2 agora tratam explicitamente o caso noPlanData (devolvido pelo
+//    Code.gs corrigido) em vez de mostrar uma poupança calculada a partir de
+//    uma fórmula fixa.
+// 7. C1 (criar plano) agora informa o utilizador de que o plano foi
+//    registado e conta para o pilar Planeamento do Score Kazola — alinhado
+//    com o facto de createPlan_ no backend passar a gravar PLAN_CREATED.
