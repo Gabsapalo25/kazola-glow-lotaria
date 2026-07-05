@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { UserSession, shouldSync, updateLastSync } from '../lib/session';
 import { saveUserData, loadUserData } from '../lib/apiClient';
+import { generateLine } from '../lib/generator';
+import { runAgents, AgentResult } from '../lib/agents';
 
 interface PlanoAposta {
   id: string;
@@ -10,6 +12,7 @@ interface PlanoAposta {
   stake: number;
   modalidade?: 'chance2' | 'chance3' | 'chance4' | 'chance5';
   executado: boolean;
+  agentResult?: AgentResult; // 🔥 resultado dos 10 filtros para esta combinação
 }
 
 interface PlanoSemanalProps {
@@ -37,6 +40,8 @@ const MODALIDADES = [
   { value: 'chance5', label: 'Chance 5', numeros: 5 },
 ] as const;
 
+type ModalidadeId = typeof MODALIDADES[number]['value'];
+
 const getStorageKey = (email: string) => `kazola_plano_v2_${email}`;
 const fmtKz = (v: number) => v.toLocaleString('pt-AO', { style: 'currency', currency: 'AOA' });
 
@@ -54,14 +59,70 @@ const fmtDateLocal = (d: Date): string => {
   return `${y}-${m}-${day}`;
 };
 
-function gerarNumeros(weights: number[], quantidade: number): number[] {
-  const total = weights.reduce((a, b) => a + b, 0);
-  const nums: number[] = [];
-  while (nums.length < quantidade) {
-    let n = Math.floor(Math.random() * 90) + 1;
-    if (!nums.includes(n)) nums.push(n);
+// ============================================================
+// 🔥 GERAÇÃO VALIDADA — cada combinação passa pelos 10 agentes
+// (substitui o antigo gerarNumeros() que usava Math.random() puro
+// e ignorava completamente os `weights` e o sistema de filtros).
+// ============================================================
+function gerarNumerosValidados(
+  weights: number[],
+  modalidade: ModalidadeId,
+  orcamento: number,
+  stakeVal: number,
+  maxTentativas = 15,
+): { numeros: number[]; agentResult: AgentResult } {
+  let melhor: { numeros: number[]; agentResult: AgentResult } | null = null;
+
+  for (let i = 0; i < maxTentativas; i++) {
+    const linha = generateLine(weights, 'kazola', {
+      exclude: [],
+      parityBias: 'equilibrado',
+      modalidade,
+    });
+
+    if (!linha) continue;
+
+    const agentResult = runAgents({
+      nums: linha.numbers,
+      modalidade,
+      stakePerLine: stakeVal,
+      orcamento,
+    });
+
+    if (agentResult.approved) {
+      return { numeros: linha.numbers, agentResult };
+    }
+
+    if (!melhor || agentResult.totalScore > melhor.agentResult.totalScore) {
+      melhor = { numeros: linha.numbers, agentResult };
+    }
   }
-  return nums.sort((a, b) => a - b);
+
+  // Nenhuma combinação atingiu o threshold nas tentativas disponíveis.
+  // Devolvemos a melhor encontrada SEM forjar aprovação — o agentResult.approved
+  // continua a refletir a verdade (false), para não enganar o utilizador.
+  if (melhor) return melhor;
+
+  // Fallback de segurança absoluto: gera uma linha simples e corre os agentes
+  // mesmo assim, para nunca devolver uma combinação sem auditoria.
+  const fallbackNums: number[] = [];
+  const usados = new Set<number>();
+  const pickSize = MODALIDADES.find(m => m.value === modalidade)!.numeros;
+  while (fallbackNums.length < pickSize) {
+    const n = Math.floor(Math.random() * 90) + 1;
+    if (!usados.has(n)) {
+      usados.add(n);
+      fallbackNums.push(n);
+    }
+  }
+  fallbackNums.sort((a, b) => a - b);
+  const agentResult = runAgents({
+    nums: fallbackNums,
+    modalidade,
+    stakePerLine: stakeVal,
+    orcamento,
+  });
+  return { numeros: fallbackNums, agentResult };
 }
 
 function getInicioSemana(): Date {
@@ -87,8 +148,8 @@ const PremiumBall: React.FC<{ n: number; executado?: boolean }> = ({ n, executad
     width: 46,
     height: 46,
     borderRadius: '50%',
-    background: executado 
-      ? 'radial-gradient(circle at 32% 32%, #86EFAC, #22C55E 45%, #15803D)' 
+    background: executado
+      ? 'radial-gradient(circle at 32% 32%, #86EFAC, #22C55E 45%, #15803D)'
       : 'radial-gradient(circle at 32% 32%, #FFF9C4, #FFD700 45%, #B8860B)',
     display: 'flex',
     alignItems: 'center',
@@ -96,7 +157,7 @@ const PremiumBall: React.FC<{ n: number; executado?: boolean }> = ({ n, executad
     fontWeight: 900,
     fontSize: '1.05rem',
     color: executado ? '#0F172A' : '#1a1000',
-    boxShadow: executado 
+    boxShadow: executado
       ? '0 0 12px rgba(134, 239, 172, 0.6), inset 0 3px 8px rgba(255,255,255,0.9), inset 0 -3px 6px rgba(0,0,0,0.4)'
       : '0 0 14px rgba(255, 215, 0, 0.7), inset 0 3px 8px rgba(255,255,255,0.85), inset 0 -4px 8px rgba(0,0,0,0.45), 0 4px 12px rgba(0,0,0,0.5)',
     position: 'relative',
@@ -110,13 +171,14 @@ const PremiumBall: React.FC<{ n: number; executado?: boolean }> = ({ n, executad
 export default function PlanoSemanal({ session, weights, onSessionUpdate }: PlanoSemanalProps) {
   const [orcamento, setOrcamento] = useState(3500);
   const [stakeVal, setStakeVal] = useState(100);
-  const [modalidade, setModalidade] = useState<'chance2' | 'chance3' | 'chance4' | 'chance5'>('chance5');
+  const [modalidade, setModalidade] = useState<ModalidadeId>('chance5');
   const [sessoesAtivas, setSessoesAtivas] = useState<Set<SessaoId>>(new Set(['Fezada', 'Aqueceu', 'Kazola', 'Eskebra']));
   const [diasAtivos, setDiasAtivos] = useState<Set<number>>(new Set([0, 1, 2, 3, 4, 5, 6]));
 
   const [plano, setPlano] = useState<PlanoAposta[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [gerando, setGerando] = useState(false);
   const [editandoId, setEditandoId] = useState<string | null>(null);
   const [editNums, setEditNums] = useState<number[]>([]);
 
@@ -181,54 +243,72 @@ export default function PlanoSemanal({ session, weights, onSessionUpdate }: Plan
     }
   };
 
-  const gerarPlano = () => {
-    const agora = new Date();
-    const hoje0h = new Date(agora);
-    hoje0h.setHours(0, 0, 0, 0);
-    const horaAtual = agora.getHours();
+  const gerarPlano = async () => {
+    setGerando(true);
+    try {
+      const agora = new Date();
+      const hoje0h = new Date(agora);
+      hoje0h.setHours(0, 0, 0, 0);
+      const horaAtual = agora.getHours();
 
-    const inicio = getInicioSemana();
-    const slots: { data: string; sessao: SessaoId }[] = [];
+      const inicio = getInicioSemana();
+      const slots: { data: string; sessao: SessaoId }[] = [];
 
-    for (let d = 0; d < 7; d++) {
-      if (!diasAtivos.has(d)) continue;
+      for (let d = 0; d < 7; d++) {
+        if (!diasAtivos.has(d)) continue;
 
-      const dt = new Date(inicio);
-      dt.setDate(inicio.getDate() + d);
-      dt.setHours(0, 0, 0, 0);
+        const dt = new Date(inicio);
+        dt.setDate(inicio.getDate() + d);
+        dt.setHours(0, 0, 0, 0);
 
-      // Ignora o DIA INTEIRO se já passou — antes só se filtrava "hoje",
-      // o que deixava entrar Domingo..Quinta já decorridos numa semana
-      // gerada a meio (ex.: hoje sexta-feira).
-      if (dt.getTime() < hoje0h.getTime()) continue;
+        // Ignora o DIA INTEIRO se já passou — antes só se filtrava "hoje",
+        // o que deixava entrar Domingo..Quinta já decorridos numa semana
+        // gerada a meio (ex.: hoje sexta-feira).
+        if (dt.getTime() < hoje0h.getTime()) continue;
 
-      const dataStr = fmtDateLocal(dt);
-      const ehHoje = dt.getTime() === hoje0h.getTime();
+        const dataStr = fmtDateLocal(dt);
+        const ehHoje = dt.getTime() === hoje0h.getTime();
 
-      for (const s of SESSOES) {
-        if (!sessoesAtivas.has(s.id)) continue;
+        for (const s of SESSOES) {
+          if (!sessoesAtivas.has(s.id)) continue;
 
-        if (ehHoje) {
-          const horaSessao = getSessaoHora(s.id);
-          if (horaSessao <= horaAtual) continue; // Ignora sessões de hoje já passadas/atuais
+          if (ehHoje) {
+            const horaSessao = getSessaoHora(s.id);
+            if (horaSessao <= horaAtual) continue; // Ignora sessões de hoje já passadas/atuais
+          }
+          slots.push({ data: dataStr, sessao: s.id });
         }
-        slots.push({ data: dataStr, sessao: s.id });
       }
+
+      const totalSlots = Math.min(slots.length, Math.floor(orcamento / stakeVal));
+      const slotsAGerar = slots.slice(0, totalSlots);
+
+      // 🔥 Cada combinação é gerada com o motor 'kazola' (generator.ts) e
+      // validada pelos 10 agentes (agents.ts) antes de entrar no plano.
+      const novosPlano: PlanoAposta[] = slotsAGerar.map((slot, i) => {
+        const { numeros, agentResult } = gerarNumerosValidados(
+          weights,
+          modalidade,
+          orcamento,
+          stakeVal,
+        );
+
+        return {
+          id: `p-${Date.now()}-${i}`,
+          data: slot.data,
+          sessao: slot.sessao,
+          numeros,
+          stake: stakeVal,
+          modalidade,
+          executado: false,
+          agentResult,
+        };
+      });
+
+      await guardar(novosPlano);
+    } finally {
+      setGerando(false);
     }
-
-    const totalSlots = Math.min(slots.length, Math.floor(orcamento / stakeVal));
-
-    const novosPlano: PlanoAposta[] = slots.slice(0, totalSlots).map((slot, i) => ({
-      id: `p-${Date.now()}-${i}`,
-      data: slot.data,
-      sessao: slot.sessao,
-      numeros: gerarNumeros(weights, numerosPorModalidade),
-      stake: stakeVal,
-      modalidade,
-      executado: false,
-    }));
-
-    guardar(novosPlano);
   };
 
   const toggleSessao = (s: SessaoId) => {
@@ -258,6 +338,7 @@ export default function PlanoSemanal({ session, weights, onSessionUpdate }: Plan
     setEditNums([...p.numeros]);
   };
 
+  // 🔥 Re-validar manualmente uma combinação editada à mão pelo utilizador
   const guardarEdicao = () => {
     if (!editandoId) return;
     const uniq = [...new Set(editNums.filter(n => n >= 1 && n <= 90))];
@@ -265,7 +346,16 @@ export default function PlanoSemanal({ session, weights, onSessionUpdate }: Plan
       alert(`Deve ter exatamente ${numerosPorModalidade} números únicos`);
       return;
     }
-    guardar(plano.map(p => p.id === editandoId ? { ...p, numeros: uniq } : p));
+    const sorted = uniq.sort((a, b) => a - b);
+    const apostaAtual = plano.find(p => p.id === editandoId);
+    const modalidadeAposta = (apostaAtual?.modalidade || modalidade) as ModalidadeId;
+    const agentResult = runAgents({
+      nums: sorted,
+      modalidade: modalidadeAposta,
+      stakePerLine: apostaAtual?.stake ?? stakeVal,
+      orcamento,
+    });
+    guardar(plano.map(p => p.id === editandoId ? { ...p, numeros: sorted, agentResult } : p));
     setEditandoId(null);
   };
 
@@ -325,7 +415,9 @@ export default function PlanoSemanal({ session, weights, onSessionUpdate }: Plan
           <span style={{ fontSize: 22 }}>📅</span>
           <h3 style={{ margin: 0, fontSize: 19, fontWeight: 800, color: '#00F5A0' }}>Plano Semanal de Apostas</h3>
         </div>
-        <p style={{ color: '#6B7280', fontSize: 13, marginBottom: 24 }}>Apenas sessões futuras a partir de agora.</p>
+        <p style={{ color: '#6B7280', fontSize: 13, marginBottom: 24 }}>
+          Apenas sessões futuras a partir de agora. Cada combinação é validada pelos 10 filtros de auditoria.
+        </p>
 
         <div style={{ marginBottom: 20 }}>
           <label style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', display: 'block', marginBottom: 10 }}>MODALIDADE</label>
@@ -382,8 +474,22 @@ export default function PlanoSemanal({ session, weights, onSessionUpdate }: Plan
         </div>
 
         <div style={{ display: 'flex', gap: 10 }}>
-          <button onClick={gerarPlano} style={{ flex: 1, padding: '13px', background: 'linear-gradient(135deg,#00F5A0,#00C896)', color: '#0B0F19', fontWeight: 800, fontSize: 15, borderRadius: 14, border: 'none', cursor: 'pointer' }}>
-            🎯 GERAR PLANO SEMANAL ({modalidade.toUpperCase()})
+          <button
+            onClick={gerarPlano}
+            disabled={gerando}
+            style={{
+              flex: 1,
+              padding: '13px',
+              background: gerando ? 'rgba(0,245,160,.35)' : 'linear-gradient(135deg,#00F5A0,#00C896)',
+              color: '#0B0F19',
+              fontWeight: 800,
+              fontSize: 15,
+              borderRadius: 14,
+              border: 'none',
+              cursor: gerando ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {gerando ? '🧠 A validar combinações…' : `🎯 GERAR PLANO SEMANAL (${modalidade.toUpperCase()})`}
           </button>
           {plano.length > 0 && (
             <button onClick={limparTudo} style={{ padding: '13px 18px', background: 'rgba(255,75,75,.1)', border: '1px solid rgba(255,75,75,.3)', color: '#FF4B4B', fontWeight: 700, fontSize: 14, borderRadius: 14, cursor: 'pointer' }}>
@@ -437,6 +543,9 @@ export default function PlanoSemanal({ session, weights, onSessionUpdate }: Plan
               {apostas.map(aposta => {
                 const sessaoInfo = SESSOES.find(s => s.id === aposta.sessao)!;
                 const mod = aposta.modalidade || 'chance5';
+                const result = aposta.agentResult;
+                const isEditing = editandoId === aposta.id;
+
                 return (
                   <div key={aposta.id} className="ps-row" style={{
                     background: aposta.executado ? 'rgba(0,245,160,.05)' : 'rgba(255,255,255,.03)',
@@ -444,28 +553,80 @@ export default function PlanoSemanal({ session, weights, onSessionUpdate }: Plan
                     borderRadius: 12,
                     padding: '14px 16px',
                   }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, flexWrap: 'wrap', gap: 6 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                         <span style={{ color: sessaoInfo.cor, fontWeight: 700 }}>{sessaoInfo.icon} {aposta.sessao}</span>
                         <span style={{ color: '#6B7280' }}>{sessaoInfo.hora}</span>
                         <span style={{ fontSize: 12, background: 'rgba(0,245,160,.15)', color: '#00F5A0', padding: '2px 8px', borderRadius: 20 }}>{mod.toUpperCase()}</span>
+                        {result && (
+                          <span
+                            title={result.summary}
+                            style={{
+                              fontSize: 11,
+                              fontWeight: 700,
+                              background: result.approved ? 'rgba(0,245,160,.15)' : 'rgba(255,75,75,.12)',
+                              color: result.approved ? '#00F5A0' : '#FF4B4B',
+                              padding: '2px 8px',
+                              borderRadius: 20,
+                            }}
+                          >
+                            {result.approved ? '✅' : '⚠️'} {result.totalScore}/100
+                          </span>
+                        )}
                       </div>
                       <div style={{ display: 'flex', gap: 6 }}>
-                        {!aposta.executado && editandoId !== aposta.id && (
+                        {!aposta.executado && !isEditing && (
                           <button onClick={() => marcarExecutado(aposta.id)} style={{ fontSize: 11, fontWeight: 700, color: '#00F5A0', background: 'rgba(0,245,160,.1)', border: '1px solid rgba(0,245,160,.3)', borderRadius: 8, padding: '4px 10px', cursor: 'pointer' }}>✅ Feita</button>
                         )}
-                        {editandoId !== aposta.id && (
+                        {!isEditing && (
                           <button onClick={() => iniciarEdicao(aposta)} style={{ fontSize: 11, fontWeight: 700, color: '#F5C518', background: 'rgba(245,197,24,.08)', border: '1px solid rgba(245,197,24,.25)', borderRadius: 8, padding: '4px 10px', cursor: 'pointer' }}>✏️</button>
                         )}
                         <button onClick={() => eliminar(aposta.id)} style={{ fontSize: 11, fontWeight: 700, color: '#FF4B4B', background: 'rgba(255,75,75,.08)', border: '1px solid rgba(255,75,75,.2)', borderRadius: 8, padding: '4px 10px', cursor: 'pointer' }}>🗑️</button>
                       </div>
                     </div>
 
-                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                      {aposta.numeros.map((n, i) => (
-                        <PremiumBall key={i} n={n} executado={aposta.executado} />
-                      ))}
-                    </div>
+                    {!isEditing && (
+                      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                        {aposta.numeros.map((n, i) => (
+                          <PremiumBall key={i} n={n} executado={aposta.executado} />
+                        ))}
+                      </div>
+                    )}
+
+                    {isEditing && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          {editNums.map((n, i) => (
+                            <input
+                              key={i}
+                              type="number"
+                              min={1}
+                              max={90}
+                              value={n}
+                              onChange={e => {
+                                const v = Math.min(90, Math.max(1, parseInt(e.target.value) || 1));
+                                setEditNums(prev => prev.map((x, idx) => idx === i ? v : x));
+                              }}
+                              style={{ ...inputStyle, width: 64, textAlign: 'center' }}
+                            />
+                          ))}
+                        </div>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <button onClick={guardarEdicao} style={{ fontSize: 12, fontWeight: 700, color: '#0B0F19', background: '#00F5A0', border: 'none', borderRadius: 8, padding: '6px 14px', cursor: 'pointer' }}>
+                            💾 Guardar e revalidar
+                          </button>
+                          <button onClick={() => setEditandoId(null)} style={{ fontSize: 12, fontWeight: 700, color: '#9CA3AF', background: 'transparent', border: '1px solid rgba(255,255,255,.15)', borderRadius: 8, padding: '6px 14px', cursor: 'pointer' }}>
+                            Cancelar
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {result && !result.approved && !isEditing && (
+                      <p style={{ marginTop: 8, fontSize: 12, color: '#FF9F4A' }}>
+                        ⚠️ {result.summary}
+                      </p>
+                    )}
                   </div>
                 );
               })}

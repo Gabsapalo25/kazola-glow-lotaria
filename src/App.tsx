@@ -87,6 +87,12 @@ import {
 } from './lib/session';
 
 // =============================================================
+// IMPORTAÇÃO DO SISTEMA DE AGENTES
+// =============================================================
+import VotePanel from './components/VotePanel';
+import { useAgents } from './hooks/useAgents';
+
+// =============================================================
 // DECLARAÇÕES GLOBAIS PARA ANALYTICS
 // =============================================================
 declare global {
@@ -155,7 +161,6 @@ function savePerformance(strategy: string, hits: number, lines: number, drawnNum
   localStorage.setItem('kazola_performance', JSON.stringify(history.slice(0, 200)));
   track('validation', { strategy, modalidade, hits, lines, winAmount });
   
-  // Se ganhou, celebrar com confetes
   if (hits >= 3) {
     celebrateWin(hits, winAmount);
   }
@@ -209,7 +214,6 @@ function getPerformance() {
 // COMPONENTES DE ESTILO PREMIUM
 // =============================================================
 
-// Componente para texto com gradiente animado
 const ShimmerText = ({ children, className = '', speed = 3 }: { children: React.ReactNode; className?: string; speed?: number }) => (
   <span 
     className={className}
@@ -227,7 +231,6 @@ const ShimmerText = ({ children, className = '', speed = 3 }: { children: React.
   </span>
 );
 
-// Componente para card com glow animado
 const GlowCard = ({ children, className = '', accentColor = '#00F5A0' }: { children: React.ReactNode; className?: string; accentColor?: string }) => (
   <div 
     className={className}
@@ -296,7 +299,6 @@ const TAB_HEADERS = {
   },
 };
 
-// Configuração dos métodos de geração - KAZOLA É O PRINCIPAL (primeiro)
 const METHOD_CONFIG: Record<string, { name: string; description: string; icon: string; color: string; premium: boolean; badge?: string }> = {
   kazola:      { name: 'Kazola',      description: 'Motor principal V4-D. Padrões históricos + cobertura por faixas + anti-partilha. Benchmark: 54.3% (≥2 acertos).', icon: '🌙', color: '#00F5A0', premium: false, badge: 'PRINCIPAL' },
   equilibrado: { name: 'Equilibrado', description: 'Um número por cada faixa adaptada à modalidade. Cobertura garantida com peso histórico.',                          icon: '⚖️', color: '#60A5FA', premium: false },
@@ -304,7 +306,6 @@ const METHOD_CONFIG: Record<string, { name: string; description: string; icon: s
   montecarlo:  { name: 'Monte Carlo', description: 'Pesos históricos + ruído gaussiano (Box-Muller). Alta variância controlada.',                                      icon: '🎲', color: '#FFD700', premium: true  },
 };
 
-// Cores por modalidade
 const MODALIDADE_COLORS: Record<Modalidade, { primary: string; glow: string }> = {
   chance2: { primary: '#60A5FA', glow: 'rgba(96,165,250,0.4)'  },
   chance3: { primary: '#00F5A0', glow: 'rgba(0,245,160,0.4)'   },
@@ -443,7 +444,6 @@ export default function App() {
   const [showPrizeModal, setShowPrizeModal] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
 
-  // Speedometer key para animação
   const [speedometerKey, setSpeedometerKey] = useState(0);
   const [speedometerHits, setSpeedometerHits] = useState(0);
 
@@ -453,7 +453,11 @@ export default function App() {
   const [checkNumbers, setCheckNumbers] = useState('');
   const [checkResult, setCheckResult] = useState<string | null>(null);
 
-  // Função que verifica se pode gerar (respeita o limite do trial)
+  // =============================================================
+  // SISTEMA DE AGENTES
+  // =============================================================
+  const { result: agentResult, evaluateCombination, reset: resetAgents } = useAgents();
+
   const canGenerateCheck = useCallback((sess: UserSession): { ok: boolean; reason?: string } => {
     if (!sess) return { ok: false, reason: 'trial_expired' };
     if (sess.isPremium) return { ok: true };
@@ -608,6 +612,9 @@ export default function App() {
     return null;
   }, [autoavaliacaoScore]);
 
+  // =============================================================
+  // FUNÇÃO ONGENERATE — MODIFICADA PARA INCLUIR AGENTES
+  // =============================================================
   function onGenerate() {
     if (!checkAccess()) return;
     if (!availableStrategies.includes(strategy)) { alert(`⚠️ O método "${strategy}" está disponível apenas para Premium ou Trial (3 dias).`); return; }
@@ -615,11 +622,32 @@ export default function App() {
     const out: { numbers: number[]; id: number }[] = [];
     const maxLines = getMaxLinesPerGeneration(session);
     const linesToGenerate = Math.min(lines, maxLines);
+    
     for (let i = 0; i < linesToGenerate; i++) {
       const r = generateLine(weights, strategy, filter);
-      if (r) out.push({ numbers: r.numbers, id: Date.now() + i });
+      if (r) {
+        out.push({ numbers: r.numbers, id: Date.now() + i });
+      }
     }
+    
     setGenerated(out);
+    
+    // =============================================================
+    // EXECUTA OS AGENTES NA PRIMEIRA LINHA GERADA
+    // =============================================================
+    if (out.length > 0) {
+      evaluateCombination({
+        nums: out[0].numbers,
+        modalidade,
+        stakePerLine,
+        bankroll: budget,
+        userHistory: null,
+        orcamento: budget,
+      });
+    } else {
+      resetAgents();
+    }
+    
     if (session) { const updated = recordGeneration(session); setSession(updated); }
     track('generate', { strategy, modalidade, lines: out.length, isPremium: !!(session?.isPremium || premium.isActive || isTrialActive(session)) });
     showToast(`${CHANCE_LABELS[modalidade]} gerada com sucesso!`, 'success');
@@ -643,7 +671,6 @@ export default function App() {
       if (winAmount > 0) {
         showToast(`🎉 Parabéns! ${bestHits} acerto${bestHits > 1 ? 's' : ''}! Ganhou ${fmtKz(winAmount)}!`, 'success');
         
-        // Animação especial para prémios
         if (bestHits >= 3) {
           setTimeout(() => {
             const elements = document.querySelectorAll('.chrome-ball');
@@ -782,7 +809,6 @@ export default function App() {
 
   const avgHitsCalc = performance.total > 0 ? (performance.hits2Plus / performance.total) * 5 : 0;
 
-  // CSS ANIMAÇÕES PREMIUM MELHORADAS
   const premiumAnimations = `
     @keyframes pulseGreen {
       0%, 100% { opacity: 1; transform: scale(1); }
@@ -857,12 +883,10 @@ export default function App() {
     .bar-grow { animation: barGrow 0.8s ease-out; }
     .fade-in-up { animation: fadeInUp 0.5s ease-out; }
     
-    /* Efeitos de número animado */
     .number-animated {
       animation: numberPop 0.4s cubic-bezier(0.34, 1.2, 0.64, 1) forwards;
     }
     
-    /* Card com glow animado */
     .glow-card {
       transition: all 0.3s ease;
       position: relative;
@@ -882,13 +906,11 @@ export default function App() {
       left: 100%;
     }
     
-    /* Scrollbar premium */
     ::-webkit-scrollbar { width: 8px; height: 8px; }
     ::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); border-radius: 10px; }
     ::-webkit-scrollbar-thumb { background: linear-gradient(135deg, #00F5A0, #00C896); border-radius: 10px; }
     ::-webkit-scrollbar-thumb:hover { background: linear-gradient(135deg, #FFD700, #FFA500); }
     
-    /* Botões com efeito de brilho */
     .btn-glow {
       position: relative;
       overflow: hidden;
@@ -918,7 +940,6 @@ export default function App() {
     >
       <style>{premiumAnimations}</style>
       
-      {/* Overlay de gradiente animado para sensação premium */}
       <div style={{
         position: 'fixed',
         top: 0,
@@ -931,7 +952,6 @@ export default function App() {
         animation: 'gradientShift 8s ease infinite',
       }} />
 
-      {/* ── BANNER OFFLINE ── */}
       {!isOnline && !offlineBannerDismissed && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 50, background: '#F59E0B', color: '#000', textAlign: 'center', padding: '8px 16px', fontSize: '0.875rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -942,7 +962,6 @@ export default function App() {
         </div>
       )}
 
-      {/* ── WIN RATE BANNER COM EFEITO GLOW ── */}
       {performance.total > 0 && (
         <motion.div 
           initial={{ opacity: 0, y: -20 }}
@@ -989,12 +1008,10 @@ export default function App() {
         </motion.div>
       )}
 
-      {/* ── MODAIS GLOBAIS ── */}
       {showGate && <AccessGate reason={gateReason} onAccess={handleAccess} />}
       {showUpgrade && session && <UpgradeModal session={session} onUpgraded={handleUpgraded} onClose={() => setShowUpgrade(false)} />}
       {showTokenActivation && session && <TokenActivation session={session} onUpgraded={handleUpgraded} onClose={() => setShowTokenActivation(false)} />}
 
-      {/* ── VERIFICAÇÃO DE IDADE ── */}
       {!ageOk && (
         <motion.div 
           initial={{ opacity: 0 }}
@@ -1029,7 +1046,6 @@ export default function App() {
         </motion.div>
       )}
 
-      {/* ── BARRA SUPERIOR ── */}
       <div style={{ background: '#0B0F19', color: '#fff', borderBottom: '1px solid rgba(255, 255, 255, 0.08)' }}>
         <div className="max-w-6xl mx-auto px-4 py-2 flex flex-wrap items-center justify-between gap-3 text-sm">
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -1106,7 +1122,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── HEADER COM LOGO E EFEITO GLOW ── */}
       <header style={{ background: 'rgba(11, 15, 25, 0.92)', backdropFilter: 'blur(16px)', borderBottom: '1px solid rgba(255, 255, 255, 0.08)', position: 'sticky', top: 0, zIndex: 30, boxShadow: '0 4px 24px rgba(0, 0, 0, 0.4)', overflow: 'visible', }}>
         <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between gap-4">
           <a href="#inicio" style={{ display: 'flex', alignItems: 'center', gap: '12px', textDecoration: 'none' }}>
@@ -1219,7 +1234,6 @@ export default function App() {
         )}
       </header>
 
-      {/* ── AVISO LEGAL COM EFEITO ── */}
       <div style={{ background: 'linear-gradient(135deg, rgba(255,215,0,0.07), rgba(255,215,0,0.02))', borderTop: '1px solid rgba(255,215,0,0.2)', borderBottom: '1px solid rgba(255,215,0,0.2)' }}>
         <div className="max-w-6xl mx-auto px-4 py-3" style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', color: '#FFD700' }}>
           <motion.span 
@@ -1235,7 +1249,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── STATUS DA API ── */}
       <div style={{ background: !apiError && draws.length > 0 ? (temDadosHoje ? 'rgba(0,245,160,0.05)' : 'rgba(255,215,0,0.05)') : 'rgba(255,215,0,0.05)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
         <div className="max-w-6xl mx-auto px-4 py-2 text-xs md:text-sm flex items-center gap-2 flex-wrap" style={{ color: '#9CA3AF' }}>
           <motion.span 
@@ -1251,10 +1264,8 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── PREMIUM BANNER ── */}
       {session && <PremiumBanner session={session} onUpgrade={() => setShowUpgrade(true)} onLogout={handleLogout} gensUsedToday={gensUsedToday} gensLimitDay={FREE_GENS_DAY} />}
 
-      {/* ── HERO COM TÍTULO ANIMADO ── */}
       <div className="relative overflow-hidden py-8 px-4" style={{ background: header.bg }}>
         <div className="max-w-6xl mx-auto text-center">
           <motion.div 
@@ -1305,7 +1316,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── TABS COM EFEITO ── */}
       <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', padding: '24px 16px 0', flexWrap: 'wrap' }}>
         {(['loto', 'totobola', 'premios'] as Tab[]).map(t => {
           const labels: Record<Tab, string> = { loto: '🎲 LOTO 5/90', totobola: '⚽ TOTOBOLA', premios: '💰 PRÉMIOS' };
@@ -1344,10 +1354,8 @@ export default function App() {
         })}
       </div>
 
-      {/* ── MAIN ── */}
       <main id="inicio" className="max-w-6xl mx-auto px-4 py-8 md:py-12 space-y-8">
 
-        {/* Selector de período com efeito glassmorphism */}
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -1367,7 +1375,6 @@ export default function App() {
           </div>
         </motion.div>
 
-        {/* Último sorteio - COM CARDS GLASS E GLOW MELHORADOS E CHROMEBALLS PREMIUM */}
         {ultimoSorteio && (
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
@@ -1408,10 +1415,8 @@ export default function App() {
                   </div>
                 )}
                 
-                {/* 4 CARDS COM EFEITO GLOW MELHORADO */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px', marginTop: '8px' }} className="md:grid-cols-4">
                   
-                  {/* 🏆 Prémio máximo - Ícone dourado com pulsação */}
                   <motion.div 
                     whileHover={{ y: -4, scale: 1.02 }}
                     animate={{ boxShadow: ['0 0 0px rgba(255,215,0,0)', '0 0 20px rgba(255,215,0,0.5)', '0 0 0px rgba(255,215,0,0)'] }}
@@ -1423,7 +1428,6 @@ export default function App() {
                     <div style={{ fontSize: '0.7rem', color: '#6B7280', marginTop: '4px' }}>Opção 5 × {fmtKz(MAX_STAKE_KZ)}</div>
                   </motion.div>
 
-                  {/* 📊 Sorteios analisados - Ícone verde com glow */}
                   <motion.div 
                     whileHover={{ y: -4, scale: 1.02 }}
                     style={{ background: 'rgba(17,24,39,0.7)', backdropFilter: 'blur(12px)', border: '1px solid rgba(0,245,160,0.4)', borderRadius: '16px', padding: '16px', textAlign: 'center', transition: 'all 0.2s ease', animation: 'borderPulse 3s infinite' }}
@@ -1433,7 +1437,6 @@ export default function App() {
                     <div style={{ fontSize: '0.7rem', color: '#6B7280', marginTop: '4px' }}>base histórica</div>
                   </motion.div>
 
-                  {/* 🎯 Probabilidade - Ícone azul */}
                   <motion.div 
                     whileHover={{ y: -4, scale: 1.02 }}
                     style={{ background: 'rgba(17,24,39,0.7)', backdropFilter: 'blur(12px)', border: '1px solid rgba(96,165,250,0.4)', borderRadius: '16px', padding: '16px', textAlign: 'center', transition: 'all 0.2s ease' }}
@@ -1443,7 +1446,6 @@ export default function App() {
                     <div style={{ fontSize: '0.7rem', color: '#6B7280', marginTop: '4px' }}>C(90,5) = {probs.total.toLocaleString('pt-AO')}</div>
                   </motion.div>
 
-                  {/* 💰 Aposta - Ícone vermelho com pulsação */}
                   <motion.div 
                     whileHover={{ y: -4, scale: 1.02 }}
                     animate={{ scale: [1, 1.02, 1] }}
@@ -1465,10 +1467,8 @@ export default function App() {
           </motion.div>
         )}
 
-        {/* ── TAB LOTO ── */}
         {tab === 'loto' && (
           <>
-            {/* MetricsStrip */}
             {performance.total > 0 && (
               <MetricsStrip
                 totalSessions={performance.total}
@@ -1478,9 +1478,6 @@ export default function App() {
               />
             )}
 
-            {/* ============================================================ */}
-            {/* 1. PLANO SEMANAL - Planeamento (o que vou jogar esta semana) */}
-            {/* ============================================================ */}
             <div id="plano_semanal">
               {hasFullAccess(session) ? (
                 <PlanoSemanal session={session!} weights={weights} hotCold={hotCold} gaps={gaps} draws={draws} onSessionUpdate={handleSessionUpdate} />
@@ -1495,9 +1492,6 @@ export default function App() {
               )}
             </div>
 
-            {/* ============================================================ */}
-            {/* 2. GERADOR COM SELECTOR DE MODALIDADE - KAZOLA PRINCIPAL */}
-            {/* ============================================================ */}
             <div id="gerador">
               <section className="grid lg:grid-cols-5 gap-6">
                 <GlowCard accentColor="#00F5A0" className="lg:col-span-3">
@@ -1512,7 +1506,6 @@ export default function App() {
                       </div>
                     </div>
                     
-                    {/* SELECTOR DE MODALIDADE - NOVO */}
                     <div style={{ marginBottom: '20px' }}>
                       <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, marginBottom: '8px', color: '#D1D5DB' }}>🎯 Modalidade de jogo</label>
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
@@ -1524,7 +1517,7 @@ export default function App() {
                               key={mod}
                               whileHover={{ scale: 1.02 }}
                               whileTap={{ scale: 0.98 }}
-                              onClick={() => { setModalidade(mod); setGenerated([]); }}
+                              onClick={() => { setModalidade(mod); setGenerated([]); resetAgents(); }}
                               style={{
                                 padding: '12px 8px',
                                 borderRadius: '12px',
@@ -1808,11 +1801,17 @@ export default function App() {
                   </div>
                 </GlowCard>
               </section>
+
+              {/* ============================================================ */}
+              {/* PAINEL DE VOTAÇÃO DOS AGENTES */}
+              {/* ============================================================ */}
+              {generated.length > 0 && agentResult && (
+                <div style={{ marginTop: '24px' }}>
+                  <VotePanel result={agentResult} modalidade={modalidade} />
+                </div>
+              )}
             </div>
 
-            {/* ============================================================ */}
-            {/* 3. FAVORITOS (movido para depois do gerador) */}
-            {/* ============================================================ */}
             <div id="favoritos">
               <GlowCard accentColor="#DC2626">
                 <div style={{ padding: '20px' }}>
@@ -1860,9 +1859,6 @@ export default function App() {
               </GlowCard>
             </div>
 
-            {/* ============================================================ */}
-            {/* 4. DIÁRIO DE APOSTAS - Registo (guardar o que joguei) */}
-            {/* ============================================================ */}
             <div id="diario">
               {hasFullAccess(session) ? (
                 <DiarioApostas session={session!} onSessionUpdate={handleSessionUpdate} draws={sorteios} />
@@ -1877,9 +1873,6 @@ export default function App() {
               )}
             </div>
 
-            {/* ============================================================ */}
-            {/* 5. RELATÓRIO MENSAL - Análise (resultados mensais) */}
-            {/* ============================================================ */}
             <div id="relatorio">
               {hasFullAccess(session) ? (
                 <RelatorioMensal session={session!} />
@@ -1894,9 +1887,6 @@ export default function App() {
               )}
             </div>
 
-            {/* ============================================================ */}
-            {/* 6. ESTATÍSTICAS - CORRIGIDO COM FALLBACK E TEXTOS VISÍVEIS */}
-            {/* ============================================================ */}
             <div id="estatisticas">
               <section className="grid lg:grid-cols-2 gap-6">
                 <GlowCard accentColor="#EF4444">
@@ -2145,9 +2135,6 @@ export default function App() {
               </GlowCard>
             </section>
 
-            {/* ============================================================ */}
-            {/* 7. HISTÓRICO */}
-            {/* ============================================================ */}
             <div id="historico">
               <GlowCard accentColor="#FFD700">
                 <div style={{ padding: '20px' }}>
@@ -2223,7 +2210,6 @@ export default function App() {
           </>
         )}
 
-        {/* ── TAB TOTOBOLA ── */}
         {tab === 'totobola' && (
           <section id="totobola">
             <GlowCard accentColor="#22A55A">
@@ -2262,11 +2248,9 @@ export default function App() {
           </section>
         )}
 
-        {/* ── TAB PRÉMIOS ── */}
         {tab === 'premios' && (
           <div id="premios">
             <section className="space-y-6">
-              {/* PrizeCalculator - Simulador de prémios (movido para PRÉMIOS) */}
               <GlowCard accentColor="#FF4B4B">
                 <div style={{ padding: '20px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
@@ -2280,7 +2264,6 @@ export default function App() {
                 </div>
               </GlowCard>
               
-              {/* Simulador de apostas (movido para PRÉMIOS) */}
               <GlowCard accentColor="#00F5A0">
                 <div style={{ padding: '20px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
@@ -2324,7 +2307,6 @@ export default function App() {
                 </div>
               </GlowCard>
 
-              {/* Tabela de multiplicadores actualizada (movida para PRÉMIOS) */}
               <GlowCard accentColor="#1E40AF">
                 <div style={{ padding: '20px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
@@ -2382,7 +2364,6 @@ export default function App() {
           </div>
         )}
 
-        {/* ── APRENDER ── */}
         <section className="grid md:grid-cols-2 gap-6">
           <GlowCard accentColor="#00F5A0">
             <div style={{ padding: '20px' }}>
@@ -2432,7 +2413,6 @@ export default function App() {
           </GlowCard>
         </section>
 
-        {/* Jogo responsável */}
         <GlowCard accentColor="#00F5A0">
           <div style={{ padding: '20px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
@@ -2467,7 +2447,6 @@ export default function App() {
         </GlowCard>
       </main>
 
-      {/* ── FOOTER ── */}
       <footer style={{ marginTop: '48px', background: '#060911', color: '#9CA3AF', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
         <div className="max-w-6xl mx-auto px-4 py-10 grid md:grid-cols-4 gap-6">
           <div>
@@ -2510,7 +2489,6 @@ export default function App() {
         </div>
       </footer>
 
-      {/* ── MODAIS (mantidas iguais) ── */}
       <Modal open={showTerms} onClose={() => setShowTerms(false)} title="Termos de uso">
         <ul className="list-disc pl-5 space-y-2 text-sm">
           <li>Idade mínima de 18 anos e residência em jurisdição onde o acesso é permitido por lei.</li>
